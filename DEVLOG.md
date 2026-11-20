@@ -1249,3 +1249,37 @@ is static (not exported), and invoking driver-unbind-time teardown logic
 on a live, possibly-in-use driver from outside is a materially more
 invasive action than anything else explored this session. Purely
 confirmatory research.
+
+## What a real subsys_stop() would actually ripple into: FastRPC's SSR notifier
+
+Checked whether anything automatically reacts to a real subsys_stop()
+beyond subsystem_restart.c's own internal bookkeeping - specifically,
+which drivers register an SSR notifier (subsys_notif_register_notifier)
+for adsp/cdsp. Found: drivers/char/adsprpc.c (FastRPC), plus
+venus_boot.c and npu_mgr.c for their own subsystems. techpack/camera
+does not register one for adsp/cdsp.
+
+Confirmed the exact chain with source, not inference:
+subsystem_put()-to-zero -> subsys_stop() fires SUBSYS_BEFORE_SHUTDOWN
+(subsystem_restart.c:879) -> fastrpc_restart_notifier_cb() marks that
+channel's ctx->subsystemstate = SUBSYSTEM_RESTARTING -> real PIL/sysmon
+shutdown runs -> subsys_stop() fires SUBSYS_AFTER_SHUTDOWN
+(subsystem_restart.c:896) -> fastrpc_restart_notifier_cb() walks every
+open fastrpc_file tied to that channel and calls complete(&fl->shutdown)
+- waking up every blocked userspace FastRPC client on that DSP channel,
+marking the channel SUBSYSTEM_DOWN.
+
+### What this adds
+
+This is a real, user-visible consequence beyond kernel-internal
+bookkeeping: driving a genuine subsys_stop() on an actively-used DSP
+channel would immediately surface as "subsystem down" to any running
+application with an open FastRPC handle on it - not just a risk to this
+module's own logic, a risk to whatever of Quest 2's normal running
+software stack happens to be using that DSP at the time. Ties directly
+into WitherBlitz's own audit finding that FastRPC's release path already
+ignores several of its own results (QUEST2_OWNER_AUDIT.md) - this
+confirms the notification side of that same mechanism fires for real
+and would be immediately visible, not latent. Reinforces, with a
+concrete causal chain now rather than general caution, why no test this
+session attempted to drive any subsystem's refcount to zero.
