@@ -565,3 +565,77 @@ that actually matters for DMA safety and turns out to be solid.
 9 of 10 subsystems now have real, trustworthy completion evidence. Only AOP
 remains genuinely unresolved, and that's a scoping question (what, if
 anything, needs confirming from it) rather than a missing-register problem.
+
+## Does kexec/the kernel actually crash without AOP work? — real answer found
+
+Went looking for the actual mechanism, not just "is AOP a DMA master." Found
+it in `drivers/soc/qcom/rpmh-rsc.c` — the RPMh/TCS (Trigger Command Set)
+driver that every other subsystem's clock/regulator/power-rail requests
+flow through to reach AOP. This is foundational infrastructure, not a
+peripheral.
+
+**The real risk, concretely:**
+
+`tcs_is_free()` checks a pure **software** bitmap (`drv->tcs_in_use`), not
+any hardware register. `rpmh_rsc_probe()` unconditionally runs
+`bitmap_zero(drv->tcs_in_use, MAX_TCS_NR)` on every probe — it assumes
+every TCS hardware slot is free, with **zero verification against real
+hardware state**. That assumption is correct on a true cold boot, where
+XBL/PBL has just brought the SoC up clean. It is **not** necessarily true
+after a kexec jump, where AOP itself was never reset and its hardware TCS
+queues kept running exactly as the old kernel left them.
+
+`rpmh_rsc_send_data()`'s own doc comment confirms the exposure window:
+"blocks until a valid data is written to the TCS" — written, not
+completed. Actual completion is a separate, asynchronous `tcs_tx_done` IRQ.
+So at the moment of a kexec jump, it's entirely possible for an
+ACTIVE_TCS slot to hold a command AOP is still actively executing, not yet
+tx-done-acknowledged. If the new kernel's blindly-zeroed bitmap lets it
+reuse that same physical slot, that's a real race — corrupting or losing
+whichever rail/clock request was in flight. Since TCS carries voltage/
+clock/power-rail requests, the failure mode genuinely ranges from subtle
+misbehavior to a hard hang or crash depending on which rail is hit (e.g. a
+corrupted CPU core-voltage request).
+
+**This is why AOP matters, and it's not the "is this even a DMA master"
+question I originally framed it as.** It's not about moving data — it's
+about a shared hardware command queue that the new kernel's own driver
+blindly assumes is empty.
+
+**The good news: this is independently checkable and already has the
+right primitives in-tree.**
+- `RSC_DRV_STATUS` (0x18) and `RSC_DRV_CMD_ENABLE` (0x1C) are real, directly
+  readable **hardware** registers per TCS — not software bookkeeping. Same
+  tier of evidence as GPU/UFS/USB's direct-register checks.
+- `rpmh_rsc_invalidate()` already exists and is already used today (called
+  from `rpmh.c` during the normal suspend/resume flush path) to safely
+  invalidate SLEEP_TCS/WAKE_TCS entries — real, tested, in-tree code, not
+  something to invent.
+- What's missing: the same real-register check extended to ACTIVE_TCS
+  before a jump, and doing this across every RSC instance on the SoC
+  (there's more than one — apps_rsc is the one we've wired in our own
+  device tree, there may be a disp_rsc too), not just the one obvious one.
+
+### Revised AOP verdict
+
+Moves from "Mixed/unclear" to **Strong** — real hardware registers exist to
+verify TCS state directly, and the existing `rpmh_rsc_invalidate()` covers
+most of what's needed already. The honest answer to "will it crash without
+this": **yes, plausibly** — not a guess, but via a specific, named,
+independently-verifiable mechanism (stale TCS slot reuse), not a vague
+hand-wave. This is exactly the kind of thing that stays invisible on every
+normal reboot (because XBL resets AOP's hardware state too) and only
+becomes a real problem the moment a kexec jump skips that reset — which is
+the whole reason this research mattered.
+
+### Final-final tally
+
+| Subsystem | Verdict |
+| --- | --- |
+| GPU, UFS, USB, Camera, **AOP** | Strong — direct hardware register confirmation |
+| ADSP/CDSP/SLPI, SyncBoss, Secure/TZ, SMMU, Video | Good — synchronous handshake |
+
+All 10 subsystems now have a real, evidenced answer. None are unexamined
+or blocked. Still zero backend code written against this framework, and
+nothing has touched real hardware — this is a complete map of what such
+code would need to do and why, not the code itself.
