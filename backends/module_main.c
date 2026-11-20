@@ -358,33 +358,60 @@ static void qkx_forward_contract_test(void)
  * module_get/put pairing inside __subsystem_get()/subsystem_put()
  * themselves keeps this properly symmetric.
  */
-static void qkx_adsp_real_action_test(void)
+/* Generalized after the first successful ADSP run. Same reasoning
+ * applies uniformly to any subsystem_restart-managed subsystem: only
+ * proceed if freshly confirmed online/not-crashed right now (never
+ * cached), acquire our own reference, immediately release it, never
+ * touch any other driver's count. Extended to the other
+ * subsystem_restart-managed entities actually present on this device
+ * (confirmed via /sys/class/subsys/ - real, not guessed) that map onto
+ * backends in this module which otherwise have zero action capability:
+ * "cdsp" (the other real DSP instance, same category as ADSP - more
+ * confidence in the same mechanism, not a new one), "venus" (this
+ * module's Video backend has no action path today), "a650_zap" (GPU's
+ * secure firmware/zap-shader loader - GPU-adjacent, distinct from KGSL
+ * itself), and "spss" (the secure processor subsystem - the first real
+ * action candidate found for Secure/TZ, which has been a pure
+ * pass-through all session).
+ */
+static void qkx_subsys_real_action_test(const char *name)
 {
 	struct subsys_device *dev;
 	int crashed;
 	void *handle;
 
-	dev = find_subsys_device("adsp");
+	dev = find_subsys_device(name);
 	if (!dev) {
-		pr_info("qkx_backends: [adsp-action] adsp device not found, skipping\n");
+		pr_info("qkx_backends: [%s-action] device not found, skipping\n", name);
 		return;
 	}
 	crashed = subsys_get_crash_status(dev);
 	if (crashed) {
-		pr_info("qkx_backends: [adsp-action] adsp crashed=%d right now, skipping - will not call subsystem_get on a down subsystem\n",
-			crashed);
+		pr_info("qkx_backends: [%s-action] crashed=%d right now, skipping - will not call subsystem_get on a down subsystem\n",
+			name, crashed);
 		return;
 	}
 
-	pr_info("qkx_backends: [adsp-action] calling subsystem_get(\"adsp\") - expected to only increment an existing reference, not boot anything\n");
-	handle = subsystem_get("adsp");
+	pr_info("qkx_backends: [%s-action] calling subsystem_get(\"%s\") - expected to only increment an existing reference, not boot anything\n",
+		name, name);
+	handle = subsystem_get(name);
 	if (IS_ERR_OR_NULL(handle)) {
-		pr_info("qkx_backends: [adsp-action] subsystem_get failed: %ld\n", PTR_ERR(handle));
+		pr_info("qkx_backends: [%s-action] subsystem_get failed: %ld\n", name, PTR_ERR(handle));
 		return;
 	}
-	pr_info("qkx_backends: [adsp-action] subsystem_get succeeded, handle=%p - releasing our own reference now\n", handle);
+	pr_info("qkx_backends: [%s-action] subsystem_get succeeded, handle=%p - releasing our own reference now\n",
+		name, handle);
 	subsystem_put(handle);
-	pr_info("qkx_backends: [adsp-action] subsystem_put done - our reference released, no lingering hold\n");
+	pr_info("qkx_backends: [%s-action] subsystem_put done - our reference released, no lingering hold\n", name);
+}
+
+static void qkx_adsp_real_action_test(void)
+{
+	qkx_subsys_real_action_test("adsp");
+	qkx_subsys_real_action_test("cdsp");
+	qkx_subsys_real_action_test("venus");
+	qkx_subsys_real_action_test("a650_zap");
+	qkx_subsys_real_action_test("spss");
 }
 
 static int __init qkx_backends_init(void)
