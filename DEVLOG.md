@@ -801,3 +801,33 @@ GPU and USB have no such path - the relevant primitives either don't
 exist or aren't exported. Camera has a real path, but it is a heavier,
 differently-risky integration than tonight's crash history makes
 advisable to attempt without more dedicated care.
+
+## CPAS pursued further - confirmed dead end for Camera's actual need
+
+Checked `enum cam_cpas_reg_base` (the only parameter selecting which
+register space `cam_cpas_reg_read()`/`cam_cpas_reg_write()` can reach):
+only three values exist - `CAM_CPAS_REG_CPASTOP`, `CAM_CPAS_REG_CAMNOC`,
+`CAM_CPAS_REG_CAMSS`. Traced `CAM_CPAS_REG_CAMSS` to
+`camss_top/cam_camsstop_hw.c` - a shared, top-level wrapper register
+block for the camera subsystem as a whole, confirmed structurally
+distinct from VFE0's own per-block register space (the same
+top-wrapper-vs-per-block split already seen between CSID's top registers
+and VFE's own `cam_vfe_core.c`). `cam_cpas_reg_read()` cannot reach
+`QKX_VFE_IRQ_STATUS0` at all, registered client or not.
+
+This means the heavier CPAS client-registration integration flagged last
+entry would not have solved the actual problem even if built - it reads
+the wrong address space entirely. Checked the rest of
+`techpack/camera/drivers/cam_isp/` for any other exported symbol: the
+only one found is `cam_ife_csid_hw_probe_init`/`_deinit` in the CSID
+driver - internal probe/remove lifecycle hooks, unsafe to call from
+outside the driver's own loading sequence (would attempt to
+re-initialize hardware the real driver already owns).
+
+### Final conclusion for Camera
+
+No safe, externally-callable path to VFE0's register exists anywhere in
+this driver tree. Camera correctly remains at the clock-gate-only, no-
+raw-read tier, same as GPU and USB. UFS's fix was a genuine exception
+this session found a real path for, not a pattern that generalizes to
+every subsystem - confirmed by actually trying, not assumed.
