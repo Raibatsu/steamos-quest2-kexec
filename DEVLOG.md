@@ -1565,3 +1565,71 @@ hardware-idle is real and proven (previous entry), so IF SMMU context
 detachment were ever added to the jump sequence for GPU specifically,
 this is the exact point where doing so would be safe to add - DMA
 completion would already be confirmed before it happened.
+
+## USB: the real completion proof exists, but the existing wrapper discards it
+
+Traced qkx_execute()'s suspend_dwc3_gadget(dev_get_drvdata(usb_core))
+call (=dwc3_gadget_suspend, gadget.c:4499) to real hardware, the same
+rigor applied to GPU above:
+
+dwc3_gadget_suspend() calls dwc3_gadget_run_stop(dwc, false, false)
+(gadget.c:2275). For the stop path (is_on=false), this is genuinely
+thorough: dwc3_stop_active_transfers_to_halt() first - explicitly, per
+its own comment, following the dwc3 databook's requirement to clear
+active transfers before stopping the controller - then writes the real
+DCTL register clearing RUN_STOP, then polls the real DWC3_DSTS register's
+DEVCTRLHLT bit in a bounded loop (timeout=1500), returning a real
+-ETIMEDOUT if the controller never confirms halted.
+
+The gap: dwc3_gadget_suspend() (gadget.c:4505-4508) calls
+dwc3_gadget_run_stop() but never checks its return value, and
+unconditionally `return 0;` regardless of what happened. qkx_execute()'s
+own check (`if (ret) panic(...)`, loader.c:1193-1194) can therefore
+never actually catch a real USB stop failure - not because the
+hardware-level proof doesn't exist, but because the existing wrapper
+throws it away before loader.c ever sees it.
+
+Checked whether this module's own backend_usb.c's existing in_lpm check
+already substitutes for this independently - it does not. dwc->in_lpm
+(dwc3-msm.c) is a separate, MSM-glue-layer runtime-PM/clock-gating
+signal, set and cleared in a different file from
+dwc3_gadget_run_stop()'s own protocol-level RUN_STOP/DEVCTRLHLT state
+in gadget.c. in_lpm reflects whether the glue layer suspended the whole
+controller block; it does not reflect whether run_stop's own hardware
+poll actually succeeded.
+
+Confirmed the fix is technically feasible, not just a recommendation in
+the abstract: loader.c's lookup() is kallsyms_lookup_name() itself
+(resolved via a kprobe trick, loader.c:208-216), already proven to
+resolve static functions (adreno_pm_suspend is static too, and already
+works this way). dwc3_gadget_run_stop is static with the same linkage
+category, so it is resolvable the same way.
+
+### Concrete, ready patch recommendation (not applied - loader.c is
+### WitherBlitz's file, and applying/testing this means exercising the
+### real jump path, explicitly out of scope for this session)
+
+Add a second lookup alongside suspend_dwc3_gadget:
+
+    int (*dwc3_run_stop_fn)(void *, int, int) =
+        (void *)lookup("dwc3_gadget_run_stop");
+
+and call it directly instead of (or immediately verify in addition to)
+dwc3_gadget_suspend():
+
+    ret = dwc3_run_stop_fn ?
+        dwc3_run_stop_fn(dev_get_drvdata(usb_core), 0, 0) :
+        suspend_dwc3_gadget(dev_get_drvdata(usb_core));
+    if (ret)
+        panic("quest_kexec: DWC3 gadget suspend failed (%d)", ret);
+
+This would let the real, already-existing, hardware-register-verified
+completion proof reach loader.c's own already-correct abort-on-error
+check, closing the gap with the SAME rigor GPU already has - without
+needing any new verification primitive invented from scratch.
+
+### Conclusion for USB
+
+Not a fundamental unknown - a precisely identified, concretely fixable
+wiring gap. The hardware-level proof already exists in shipped code; it
+is one unchecked return value away from being as solid as GPU's chain.
