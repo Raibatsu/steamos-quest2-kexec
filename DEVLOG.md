@@ -715,3 +715,45 @@ ARM64 kernel module, vermagic-matched to this device's actual kernel.**
 Not yet loaded or run on real hardware - that's the next real step, and a
 materially different risk category from everything checked so far tonight
 since it means running new code inside the one kernel this headset has.
+
+## First successful real-hardware test, after two real crashes and fixes
+
+With the raw-MMIO-read removal in place, `qkx_backends.ko` loaded cleanly
+on the real device (insmod exit 0), ran its self-test across all 10
+backends, unloaded cleanly (rmmod exit 0), and caused no reboot. Real
+output from dmesg, with the headset actively on and in use over USB at
+the time:
+
+| Subsystem | Result | Consistent with reality? |
+| --- | --- | --- |
+| Camera | idle | Yes - not capturing |
+| ADSP/CDSP/SLPI | idle | Not crashed |
+| GPU | **busy** | Yes - actively rendering Home UI |
+| SyncBoss | idle | Point-in-time PM snapshot between SPI transactions |
+| USB | **busy** | Yes - live ADB/USB session in progress |
+| UFS | **busy** | Plausible under active use |
+| Video | idle | Not transcoding |
+| SMMU | idle | Pass-through (by design) |
+| Secure/TZ | idle | Pass-through (by design) |
+| AOP | idle | Pass-through (by design) |
+
+GPU/USB/UFS correctly reporting "busy" while the device is actively being
+used, rather than crashing or falsely claiming idle, is exactly the
+honest behavior this revision was aiming for.
+
+### Honest standing after tonight's full arc
+
+Two real reboots were caused by this research, both understood, both
+fixed by removing the specific unsafe operation rather than patching
+around it repeatedly. The module now:
+- Never performs a raw MMIO register read anywhere in any backend.
+- Gives real, consistent, hardware-grounded answers for 7 of 10
+  subsystems (idle/busy via clock-gate state or a safe exported query).
+- Explicitly, honestly defers on 3 (SMMU, Secure/TZ, AOP) rather than
+  guess - including AOP, the subsystem whose finding mattered most, which
+  remains a real, open, unresolved risk, not a disproven one.
+
+This is a materially weaker evidence tier than originally designed, but
+it is the tier that survives contact with real hardware without crashing
+it a third time. All of this logged and pushed to the repo as it
+happened, including the mistakes.
