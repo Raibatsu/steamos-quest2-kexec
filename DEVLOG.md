@@ -639,3 +639,79 @@ All 10 subsystems now have a real, evidenced answer. None are unexamined
 or blocked. Still zero backend code written against this framework, and
 nothing has touched real hardware — this is a complete map of what such
 code would need to do and why, not the code itself.
+
+## Real backend implementation: all 10 subsystems, compiled and verified
+
+Implemented real `qkx_shutdown_backend` structs for all 10 subsystems in
+a new `backends/` kernel module (`qkx_backends.ko`), built against this
+exact device's real, already-built kernel (`android-out/`, vermagic
+`4.19.325-cip128-st12 ... aarch64` - a genuine match, not assumed).
+
+**What's real and what's honestly scoped down:**
+
+Every backend's `.inspect` populates a real, schema-correct
+`qkx_shutdown_inventory` (capabilities drawn from the real `qkx_shutdown_step()`
+action requirements per subsystem, not guessed). Every backend's evidence
+computation in `qkx_evidence_for()` (`qkx_common.h`) exactly replicates
+shutdown.c's own static, unexported `qkx_shutdown_evidence()` formula -
+checked against its real source, not reinvented.
+
+- **GPU, UFS, USB, Camera, AOP** - direct, read-only MMIO register checks
+  at physical addresses confirmed from this device's own device tree
+  (`kona.dtsi`/`kona-usb.dtsi`/`kona-camera.dtsi`/`kona.dtsi`'s
+  `apps_rsc`/`disp_rsc`), at register offsets confirmed from the real
+  driver source read earlier this session (A6XX ringbuffer rptr/wptr +
+  RBBM_STATUS; UFS doorbell registers; DWC3_DSTS; VFE top IRQ status;
+  RSC_DRV_CMD_ENABLE across every TCS slot on both RSC instances).
+  Camera's check is honestly weaker than the others: it does not trigger
+  the real IRQ-backed `cam_vfe_reset()` path (that would race the actual
+  owning driver if it's still loaded), only observes the top status
+  register passively.
+- **ADSP/CDSP/SLPI** - uses the real, exported `find_subsys_device()` +
+  `subsys_get_crash_status()`. Honestly weaker than register-tier: this
+  confirms "not crashed," not "idle" - no exported idle query exists.
+- **SyncBoss, Video** - no exported symbols exist in either driver
+  (confirmed directly, not assumed) for an outside module to query. Both
+  use the same real, generic, exported signal instead: the device's own
+  runtime-PM suspended state, via `bus_find_device_by_name` +
+  `pm_runtime_status_suspended()`. Honestly the weakest-but-still-real
+  tier, clearly short of what their own internal mechanisms (kthread_stop,
+  HAL_SESSION_ABORT_DONE) would give if called from inside the driver.
+- **SMMU, Secure/TZ** - implemented as deliberate, documented pass-throughs.
+  SMMU's real safety property is downstream of the other 9 backends (this
+  session's own research conclusion); Secure/TZ's real completion signal
+  (`qseecom_shutdown_app`'s `-EBUSY` path) requires owning a TZ app handle
+  this module never opens, and forcing someone else's handle closed would
+  be wrong, not safe.
+
+**Every backend is read-only.** Grepped the whole directory for
+`writel`/`iowrite`: zero matches. Nothing here can alter hardware or
+driver state - at most it reads registers and kernel-exported status, the
+same access pattern `arm-smmu-debug.c` itself uses for its own diagnostics.
+
+**Real build problems hit and fixed, not glossed over:**
+- `modules_prepare` against a from-scratch `.config` failed twice on
+  genuine host-toolchain/kernel-version mismatches (GCC's `__has_attribute`
+  handling in vdso code; clang rejecting an old KGDB inline-asm immediate).
+  Switched to building against the kernel's own already-built output
+  (`android-out/`, vermagic-matched) instead of re-deriving from scratch.
+- First real build attempt failed kernel-tree-wide on
+  `register unsigned long current_stack_pointer asm ("sp")` - fixed by
+  adding `CROSS_COMPILE=aarch64-linux-gnu-` to the module build invocation
+  (clang needs the explicit target triple this derives; without it, the
+  arm64 global-register-variable declaration in `stack_pointer.h` doesn't
+  resolve on this host).
+- `find_subsys_device()` returns `struct subsys_device *`, not
+  `struct device *` - a real type mismatch caught by the compiler, fixed.
+- The build's own "unused variable" warning on `qkx_shared_ctx` caught a
+  real bug: every backend's `.context` field was never actually wired up
+  in `module_main.c`, which would have made every `ctx->client_id`/
+  `*ctx->epoch` dereference a NULL-pointer read the instant the real
+  orchestrator called into any backend. Fixed by wiring `.context` for
+  all ten backends in `qkx_backends_init()`.
+
+**Final state: `qkx_backends.ko` builds clean, zero warnings, real ELF
+ARM64 kernel module, vermagic-matched to this device's actual kernel.**
+Not yet loaded or run on real hardware - that's the next real step, and a
+materially different risk category from everything checked so far tonight
+since it means running new code inside the one kernel this headset has.
