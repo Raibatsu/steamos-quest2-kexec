@@ -2,6 +2,8 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/ktime.h>
+#include <linux/device.h>
+#include <linux/platform_device.h>
 #include <soc/qcom/subsystem_restart.h>
 #include "shutdown.h"
 #include "qkx_ctx.h"
@@ -405,6 +407,50 @@ static void qkx_subsys_real_action_test(const char *name)
 	pr_info("qkx_backends: [%s-action] subsystem_put done - our reference released, no lingering hold\n", name);
 }
 
+/* UFS's own equivalent: ufshcd_hold()/ufshcd_release() (EXPORT_SYMBOL_GPL,
+ * confirmed in ufshcd.c, the same primitive already used inside
+ * backend_ufs.c's read path all session) is a real, symmetric
+ * acquire/release pair too, just not previously exercised as its own
+ * isolated test - it has only ever run bracketed around a register
+ * read before now. struct ufs_hba is treated as opaque here on purpose,
+ * same as backend_ufs.c: this module never dereferences it, only passes
+ * the pointer straight through to ufshcd.c's own exported functions.
+ */
+struct ufs_hba;
+extern int ufshcd_hold(struct ufs_hba *hba, bool async);
+extern void ufshcd_release(struct ufs_hba *hba, bool no_sched);
+
+static void qkx_ufs_real_action_test(void)
+{
+	struct device *dev;
+	struct ufs_hba *hba;
+	int ret;
+
+	dev = bus_find_device_by_name(&platform_bus_type, NULL, "1d84000.ufshc");
+	if (!dev) {
+		pr_info("qkx_backends: [ufs-action] device not found, skipping\n");
+		return;
+	}
+	hba = dev_get_drvdata(dev);
+	if (!hba) {
+		put_device(dev);
+		pr_info("qkx_backends: [ufs-action] no drvdata, skipping\n");
+		return;
+	}
+
+	pr_info("qkx_backends: [ufs-action] calling ufshcd_hold() - the real driver's own acquire primitive\n");
+	ret = ufshcd_hold(hba, false);
+	if (ret) {
+		pr_info("qkx_backends: [ufs-action] ufshcd_hold failed: %d\n", ret);
+		put_device(dev);
+		return;
+	}
+	pr_info("qkx_backends: [ufs-action] ufshcd_hold succeeded - releasing now\n");
+	ufshcd_release(hba, false);
+	pr_info("qkx_backends: [ufs-action] ufshcd_release done - no lingering hold\n");
+	put_device(dev);
+}
+
 static void qkx_adsp_real_action_test(void)
 {
 	qkx_subsys_real_action_test("adsp");
@@ -446,6 +492,7 @@ static int __init qkx_backends_init(void)
 	qkx_rollback_contract_test();
 	qkx_forward_contract_test();
 	qkx_adsp_real_action_test();
+	qkx_ufs_real_action_test();
 	return 0;
 }
 
