@@ -1849,3 +1849,60 @@ In addition to commit `670daba` (`dwc3_gadget_suspend()` discarding
    - `kernel_restart_prepare()` / `device_shutdown()` (runs `ufshcd_shutdown()` and `msm_pdev_shutdown()`); verify UFS powered off / clock-gated.
    - `migrate_to_reboot_cpu()` + `machine_shutdown()` (offline secondary CPUs).
    - RPMh/RSC: verify `18200000.rsc` active TCS bits (`0x3`) clear + `rpmh_flush(rpmh_dev)` (check return!).
+
+---
+
+# Stage 3 Source-Verified Watchdog & Recovery Audit
+
+Audited `drivers/soc/qcom/watchdog_v2.c`, `drivers/power/reset/msm-poweroff.c`,
+`baseline/boot.dtb`, `device.config`, and `baseline/target.config` against
+`docs/QUEST2_WATCHDOG_RECOVERY.md`.
+
+## 1. AP Hardware Watchdog (`17c10000.qcom,wdt`)
+
+- **DTB timing (`boot.dtb`)**: `qcom,bark-time = <0x2ee0>` (12000 ms = 12.0 s),
+  `qcom,pet-time = <0x2490>` (9360 ms = 9.36 s), `WDT_HZ = 32765`
+  (`watchdog_v2.c:147`), bite = `bark + 3*WDT_HZ` = **15.0 s** (`491475` ticks).
+- **Survives `device_shutdown()`**: `msm_watchdog_driver`
+  (`watchdog_v2.c:1103-1112`) has **no `.shutdown` callback** and **no
+  `reboot_notifier`**. With `preserve_watchdog=1, watchdog_recovery=1,
+  watchdog_control=0`, the AP watchdog remains hardware-armed across every
+  Stage 2 shutdown boundary (GPU, SyncBoss, PCIe, USB, DSP, AOP, UFS, Display,
+  CPU offline, RPMh flush, trampoline). `loader.c:1278` pets `WDT0_RST`
+  (`0x17c10004`) right before the trampoline, giving the target kernel a fresh
+  15-second hardware bite deadline.
+- **Confirmed `loader.c` timing bug**: `loader.c:1293-1300` (`watchdog_control`)
+  writes `622535` / `655300` ticks (19.0 s / 20.0 s at `WDT_HZ=32765`) instead
+  of 10 s; keep `watchdog_control=0` (or use `327650` / `425945` for 10 s / 13 s).
+- **Warm reset, NOT EDL**: `download_mode = 0` (`msm-poweroff.c:65`) and
+  `CONFIG_MSM_DLOAD_MODE` is unset in `device.config`, so a watchdog bite
+  warm-resets back into XBL -> ABL -> Horizon OS rather than trapping in EDL.
+
+## 2. Retained Diagnostics (`ramoops` / `pstore`)
+
+- **Exact DTB geometry (`boot.dtb`)**: `0x9ba00000..0x9ba90000` (576 KiB):
+  - `dmesg` records: `0x9ba00000..0x9ba50000` (2x 128 KiB + 64 KiB)
+  - `console-ramoops-0`: `0x9ba50000..0x9ba70000` (128 KiB)
+  - `pmsg-ramoops-0`: `0x9ba70000..0x9ba90000` (128 KiB)
+- Both `device.config` and `baseline/target.config` enable `CONFIG_PSTORE=y`,
+  `CONFIG_PSTORE_RAM=y`, `CONFIG_PSTORE_CONSOLE=y`, `CONFIG_PSTORE_PMSG=y`,
+  `CONFIG_QCOM_WATCHDOG_V2=y`, and `CONFIG_WATCHDOG_NOWAYOUT=y`.
+- `console-ramoops-0` automatically captures every `pr_emerg()` phase log from
+  `loader.c` without touching the legacy marker (`0x9ba80000`), which collided
+  with `pmsg`.
+
+## 3. External Physical Backstop (PM8150 PON)
+
+- `boot.dtb` (`qcom,pon_1` power `0x74`, `qcom,pon_2` vol-down `0x72`) sets no
+  `qcom,support-reset` override, leaving the bootloader's hardware S2/S3 reset
+  configuration intact.
+
+## Remaining Physical Work to Close Stage 3
+
+Source verification is complete. Closing Stage 3 physically requires live
+headset execution:
+1. Run baseline `tools/quest2_recovery_probe.py` capture (rooted ADB).
+2. Perform a timed physical-button recovery rehearsal (Power + Vol-Down ->
+   Boot Device), verify usable Horizon Home + head/controller tracking, re-root,
+   and run the after-capture + `--compare-before/--compare-after`.
+3. Verify `console-ramoops-0` survival across a reset/watchdog bite.
