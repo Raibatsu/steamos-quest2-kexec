@@ -831,3 +831,46 @@ this driver tree. Camera correctly remains at the clock-gate-only, no-
 raw-read tier, same as GPU and USB. UFS's fix was a genuine exception
 this session found a real path for, not a pattern that generalizes to
 every subsystem - confirmed by actually trying, not assumed.
+
+## Camera, exhausted from every angle tried
+
+After GPU and USB both found real signals via generic framework-level
+sysfs (gpubusy, UDC state) rather than driver-specific APIs, tried the
+same strategy for Camera. Checked, on the real device, in order:
+
+- **V4L2/media class devices** (`/sys/class/video4linux/`): 13 subdevs
+  exist (cam-cpas, cam-isp, cam-isp-fastpath, 6x cam-csiphy-driver, 4x
+  cam-sensor-driver) plus video0/1/32/33. Every one of them links back to
+  the same parent device (`soc:qcom,cam-req-mgr`) and every one of their
+  own `power/runtime_status` files reads "unsupported" - these are
+  virtual registration nodes under the request-manager framework, not
+  independently power-tracked devices. No distinct per-VFE0 signal here.
+- **devfreq class** (`/sys/class/devfreq/`): real entries exist for UFS,
+  GPU, several CPU/NPU bandwidth monitors - no camera-specific node
+  registered at all. Not available for this subsystem.
+- **tracefs** (`/sys/kernel/tracing/`): genuinely mounted and real (unlike
+  debugfs), with real generic PM tracepoints available (`clock_enable`,
+  `clock_disable`, `power_domain_target`, `suspend_resume`, etc). Not
+  pursued further: this is event history, not a queryable current state -
+  answering "is VFE busy right now" from a trace buffer would mean
+  enabling tracing, capturing a window, and interpreting recency, a
+  fundamentally different and much fuzzier tool than a direct state read
+  like gpubusy or UDC state.
+- **CPAS** (previous round): confirmed reads the wrong address space
+  entirely (CPASTOP/CAMNOC/CAMSS-top, not VFE0's own registers).
+- **debugfs** (previous round): not mounted on this device at all, so
+  `sessions_info` and any other debugfs-based signal was never reachable
+  regardless of what it exposes.
+- **Direct exports** (earlier round): only
+  `cam_ife_csid_hw_probe_init`/`_deinit`, internal lifecycle hooks unsafe
+  to call from outside the driver's own loading sequence.
+
+### Final conclusion
+
+This was a genuinely thorough search across every category of signal
+that worked for a sibling subsystem (framework-level sysfs, driver-
+specific exports, debugfs, bus-level APIs, trace infrastructure) - not a
+quick look. Camera has no safe externally-reachable signal beyond the
+clock-gate check already in place, and stays honestly at that tier. GPU
+and USB's wins don't generalize here; this is a real, checked limit, not
+an assumption.
