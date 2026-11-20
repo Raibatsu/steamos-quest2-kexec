@@ -1059,3 +1059,54 @@ consequential step - it would mean actually invoking a real subsystem
 stop, not bracketing one. That decision deserves its own explicit
 discussion before attempting, not a natural continuation of this round's
 pace.
+
+## Researching the real subsys_stop() path before attempting it
+
+Checked whether any of the 9 subsystem_get/put tests this session
+accidentally exercised a real boot/stop cycle, by checking for
+subsys_start()'s own real log line ("Powering up %s", plain pr_info(),
+confirmed in subsystem_restart.c). None appeared on a fresh reload -
+confirmed, not assumed: every one of those 9 subsystems was already
+running before this module ever touched it. None of this session's
+action tests have exercised the real teardown path.
+
+Looked for a safer, non-destructive way to probe the shutdown
+communication channel itself without sending a real shutdown.
+sysmon_get_reason() (sysmon-qmi.c, EXPORT_SYMBOL) looked promising - a
+read-only "get failure reason" QMI query - but it reaches out to real
+remote firmware over QMI, a materially different and less
+locally-verifiable risk than anything tested so far (every earlier
+action test this session stayed entirely in local kernel bookkeeping).
+Its semantics are also for querying a subsystem AFTER a crash; calling
+it on a healthy subsystem is genuinely uncertain territory this session
+doesn't have grounds to resolve from source alone. Not attempted.
+
+Instead, checked WitherBlitz's own independent research
+(docs/QUEST2_OWNER_AUDIT.md) for prior findings on this exact path -
+real, valuable cross-validation, not something to attempt blind:
+
+- Confirmed the same gap this session found independently much earlier:
+  "OFFLINE/refcount zero is not shutdown proof" - sysmon failure is
+  logged but the descriptor's return value is discarded; PIL shutdown
+  errors do not propagate to file close either.
+- New, concrete detail this session didn't have: sysmon's real timing -
+  "a 500 ms transaction wait and a 10 s acknowledgement wait" - a real
+  subsys_stop() could block for 10+ seconds, not be instant.
+- Critical gap for any real attempt: subsystem_put() returns void - no
+  status at all. If a real stop silently failed internally, there is no
+  way to know from the API itself. A real test would need an independent
+  verification step afterward (e.g., this module's own ADSP-style real
+  subsys_state read) rather than trusting a lack of a crash as success.
+- They explicitly label their own proposed stop sequence "not executable
+  yet" - confirming neither they nor this session has ever run a real
+  one.
+
+### What this adds to confidence toward the gate
+
+Real, concrete detail now understood about what a genuine subsys_stop()
+test would require (independent post-check, since the API gives no
+status; tolerance for a 10+ second wait) and real, independent
+confirmation that the core problem (completion isn't provable from the
+API) is correctly understood, not assumed. Still have not attempted a
+real teardown - this was research to know what attempting one correctly
+would require, not an attempt itself.
