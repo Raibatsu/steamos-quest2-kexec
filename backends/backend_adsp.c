@@ -29,6 +29,7 @@
 #include <linux/errno.h>
 #include <linux/uaccess.h>
 #include <linux/mutex.h>
+#include <linux/device.h>
 #include <soc/qcom/subsystem_restart.h>
 #include "qkx_common.h"
 #include "qkx_ctx.h"
@@ -42,10 +43,23 @@
 #define QKX_TRACK_STATE_OFF		8
 #define QKX_TRACK_LOCK_OFF		16
 #define QKX_SUBSYS_STATE_OFFLINE	1
+/* Offset of the embedded struct device within struct subsys_device,
+ * resolved from this device's own BTF - needed because
+ * find_subsys_device() returns a reference-counted pointer
+ * (bus_find_device() calls get_device() internally, confirmed directly
+ * in drivers/base/bus.c) that must be released with put_device(), and
+ * struct subsys_device is kept opaque here on purpose, so &dev->dev is
+ * not available - this offset is the correct, verified way to get the
+ * real struct device* without ever dereferencing the opaque type.
+ * Matches WitherBlitz's own independently-reverse-engineered
+ * QCD_DSP_DEV=240 exactly, additional cross-validation.
+ */
+#define QKX_SUBSYS_DEV_OFF		240
 
 static bool qkx_adsp_not_crashed(void)
 {
 	struct subsys_device *dev;
+	struct device *real_dev;
 	int crashed;
 	void *restart_order = (void *)1; /* non-NULL default: fail safe */
 	void *track_addr;
@@ -57,13 +71,24 @@ static bool qkx_adsp_not_crashed(void)
 	if (!dev)
 		return false; /* can't find it: don't claim safety we don't have */
 
+	/* find_subsys_device() returns a device with a reference already
+	 * taken (it calls bus_find_device(), which calls get_device() on
+	 * whatever it matches - confirmed directly in drivers/base/bus.c).
+	 * That reference was being leaked here on every call before this
+	 * fix: every return path below now goes through put_device(real_dev)
+	 * exactly once.
+	 */
+	real_dev = (struct device *)((char *)dev + QKX_SUBSYS_DEV_OFF);
 	crashed = subsys_get_crash_status(dev);
-	if (crashed)
+	if (crashed) {
+		put_device(real_dev);
 		return false;
+	}
 
 	if (probe_kernel_read(&restart_order, (char *)dev + QKX_SUBSYS_RESTART_ORDER_OFF,
 			       sizeof(restart_order))) {
 		pr_info("qkx_backends: [adsp/cdsp/slpi] restart_order read failed\n");
+		put_device(real_dev);
 		return crashed == 0; /* fall back to crash-status-only */
 	}
 	if (restart_order) {
@@ -74,19 +99,24 @@ static bool qkx_adsp_not_crashed(void)
 		 */
 		pr_info("qkx_backends: [adsp/cdsp/slpi] grouped restart_order=%p - state check skipped, using crash-status only\n",
 			restart_order);
+		put_device(real_dev);
 		return crashed == 0;
 	}
 
 	track_addr = (char *)dev + QKX_SUBSYS_TRACK_OFF;
 	track_lock = (struct mutex *)((char *)track_addr + QKX_TRACK_LOCK_OFF);
-	if (!mutex_trylock(track_lock))
+	if (!mutex_trylock(track_lock)) {
+		put_device(real_dev);
 		return false; /* busy: inconclusive, not idle */
+	}
 
 	if (probe_kernel_read(&state, (char *)track_addr + QKX_TRACK_STATE_OFF, sizeof(state))) {
 		mutex_unlock(track_lock);
+		put_device(real_dev);
 		return false;
 	}
 	mutex_unlock(track_lock);
+	put_device(real_dev);
 
 	offline = (state == QKX_SUBSYS_STATE_OFFLINE);
 	pr_info("qkx_backends: [adsp/cdsp/slpi] subsys_state=%d (0=offlining,1=offline,2=online) crashed=%d\n",

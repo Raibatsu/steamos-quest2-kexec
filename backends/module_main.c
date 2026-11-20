@@ -4,6 +4,8 @@
 #include <linux/ktime.h>
 #include <linux/device.h>
 #include <linux/platform_device.h>
+#include <linux/uaccess.h>
+#include <linux/mutex.h>
 #include <soc/qcom/subsystem_restart.h>
 #include "shutdown.h"
 #include "qkx_ctx.h"
@@ -376,9 +378,55 @@ static void qkx_forward_contract_test(void)
  * action candidate found for Secure/TZ, which has been a pure
  * pass-through all session).
  */
+/* Same subsys_device layout backend_adsp.c already resolved via this
+ * device's own BTF and verified live (track at offset 176, state at
+ * +8, lock at +16) - struct subsys_device's layout is uniform across
+ * every subsystem_restart-managed entity, not ADSP-specific, so the
+ * same offsets apply here to whichever name is passed in.
+ */
+#define QKX_ACTION_TRACK_OFF	176
+#define QKX_ACTION_STATE_OFF	8
+#define QKX_ACTION_LOCK_OFF	16
+/* Offset of the embedded struct device within struct subsys_device -
+ * same verified offset (240) as backend_adsp.c, matching WitherBlitz's
+ * own independently-reverse-engineered QCD_DSP_DEV=240. Needed because
+ * find_subsys_device()'s returned reference must be released via
+ * put_device(), and struct subsys_device is kept opaque here on purpose.
+ */
+#define QKX_ACTION_DEV_OFF	240
+
+/* Closes the exact gap independent research (WitherBlitz's own
+ * QUEST2_OWNER_AUDIT.md) flagged: subsystem_put() returns void, no
+ * status at all - if a real stop ever silently failed internally,
+ * there is no way to know from the API itself. This re-checks crash
+ * status AND the real subsys_state independently afterward, using the
+ * same tools already proven safe in backend_adsp.c, rather than
+ * trusting "it didn't crash" as success. Logged regardless of outcome -
+ * this is the verification step a real test would need, exercised here
+ * even though every call in this round keeps the refcount above zero
+ * (nothing to verify a "stop" on yet, but the check itself is now real
+ * and ready).
+ */
+static void qkx_action_post_check(struct subsys_device *dev, const char *name)
+{
+	struct mutex *lock;
+	s32 state = -1;
+	int crashed = subsys_get_crash_status(dev);
+
+	lock = (struct mutex *)((char *)dev + QKX_ACTION_TRACK_OFF + QKX_ACTION_LOCK_OFF);
+	if (mutex_trylock(lock)) {
+		probe_kernel_read(&state, (char *)dev + QKX_ACTION_TRACK_OFF + QKX_ACTION_STATE_OFF,
+			sizeof(state));
+		mutex_unlock(lock);
+	}
+	pr_info("qkx_backends: [%s-action] post-check: crashed=%d subsys_state=%d (0=offlining,1=offline,2=online,-1=lock busy/unread)\n",
+		name, crashed, state);
+}
+
 static void qkx_subsys_real_action_test(const char *name)
 {
 	struct subsys_device *dev;
+	struct device *real_dev;
 	int crashed;
 	void *handle;
 
@@ -387,10 +435,19 @@ static void qkx_subsys_real_action_test(const char *name)
 		pr_info("qkx_backends: [%s-action] device not found, skipping\n", name);
 		return;
 	}
+	/* find_subsys_device() returns a device with a reference already
+	 * taken (bus_find_device() calls get_device() on whatever it
+	 * matches, confirmed directly in drivers/base/bus.c) - every
+	 * return path below releases it exactly once via put_device(real_dev),
+	 * same fix and same verified offset as backend_adsp.c.
+	 */
+	real_dev = (struct device *)((char *)dev + QKX_ACTION_DEV_OFF);
+
 	crashed = subsys_get_crash_status(dev);
 	if (crashed) {
 		pr_info("qkx_backends: [%s-action] crashed=%d right now, skipping - will not call subsystem_get on a down subsystem\n",
 			name, crashed);
+		put_device(real_dev);
 		return;
 	}
 
@@ -399,12 +456,15 @@ static void qkx_subsys_real_action_test(const char *name)
 	handle = subsystem_get(name);
 	if (IS_ERR_OR_NULL(handle)) {
 		pr_info("qkx_backends: [%s-action] subsystem_get failed: %ld\n", name, PTR_ERR(handle));
+		put_device(real_dev);
 		return;
 	}
 	pr_info("qkx_backends: [%s-action] subsystem_get succeeded, handle=%p - releasing our own reference now\n",
 		name, handle);
 	subsystem_put(handle);
+	qkx_action_post_check(dev, name);
 	pr_info("qkx_backends: [%s-action] subsystem_put done - our reference released, no lingering hold\n", name);
+	put_device(real_dev);
 }
 
 /* UFS's own equivalent: ufshcd_hold()/ufshcd_release() (EXPORT_SYMBOL_GPL,
