@@ -1316,3 +1316,37 @@ on wake. Even with this real, already-built AOP-QMP-disconnect code in
 place, the TCS stale-slot concern remains a genuinely separate,
 unaddressed gap - not already covered by existing work this session
 hadn't looked at.
+
+## Completing the qkx_execute() audit: the final jump itself, and a striking independent confirmation
+
+Read the rest of qkx_execute() through to the actual jump
+(loader.c:1292-1343). Confirms the picture from the previous entry is
+complete, not partial: between the watchdog-quiesce code and the final
+qkx_enter(virt_to_phys(pgd_page), virt_to_phys(code_page),
+virt_to_phys(first_desc), payload_entry, payload_dtb) call, the only
+remaining steps are cache maintenance (__flush_dcache_area/
+__flush_icache_range) and masking interrupts/preemption
+(local_irq_disable/preempt_disable). Nothing SMMU/IOMMU/DMA-related
+appears anywhere between the gate check and the literal final jump -
+confirmed end to end for the whole function, not just the portion
+already read.
+
+Also found something worth recording on its own: the existing rollback
+path (the release_devices: label, run when an earlier step fails)
+carries this comment on resuming GPU/Syncboss:
+
+    "These callbacks can defer work or hide internal errors: return
+    zero is not proof that hardware has recovered."
+
+This is the original author independently stating, in their own
+already-shipped, most load-bearing code, the exact same principle this
+session's entire backend methodology has operated under all along: a
+callback's success return value is evidence, not proof, of real
+hardware completion. Not a new finding about the gate itself, but a
+clear, independent confirmation that this session's caution (treating
+"the function returned 0" as inconclusive rather than definitive, the
+reasoning behind every mutex_trylock/busy-is-inconclusive and
+clock-gate-first check across every backend this session built) matches
+the standard the person who wrote the gate itself was already applying
+to their own code, not a self-imposed extra layer of caution beyond
+what the project calls for.
