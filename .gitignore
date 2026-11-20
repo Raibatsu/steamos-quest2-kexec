@@ -23,3 +23,14 @@ backends/.*.cmd
 backends/Module.symvers
 backends/modules.order
 backends/.tmp_versions/
+
+# Loader module build artifacts
+loader/*.o
+loader/*.ko
+loader/*.mod.c
+loader/*.mod.o
+loader/*.cmd
+loader/.*.cmd
+loader/Module.symvers
+loader/modules.order
+loader/.tmp_versions/

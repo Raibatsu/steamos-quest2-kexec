@@ -1934,3 +1934,29 @@ headset execution:
   owns all `/dev/syncboss*`, `/dev/video0..1`, and `/dev/v4l-subdev0..12`, while
   `/odm/bin/trackingservice`, `adsprpcd`, and `cdsprpcd` own
   `/dev/adsprpc-smd-secure`.
+
+---
+
+# Stage 4: First Recoverable Linux Boot (Live Quest 2)
+
+## Steps 4a–4d (Patched Loader + Full Reversible Preflight Ladder)
+
+- **4a (`loader/quest_kexec.ko`)**: Copied upstream `module/` into `loader/`
+  and wired our Stage 2 fixes (`stage2_verified` opt-in gate, `clear_pci_master`
+  for CNSS PCIe WiFi, USB DWC3 `dwc->lock` + `dwc3_gadget_run_stop(dwc,0,0)` +
+  `synchronize_irq`, `shutdown_dsps` via `subsys_desc->shutdown` before AOP QMP,
+  `qmp_channels_only` using `qmp_shutdown()` without inlined `send_irq`, and
+  APPS_RSC `18200000.rsc` active-TCS drain before `rpmh_flush()`). Compiled
+  cleanly with zero warnings (`480K`).
+- **4b (`preflight_only=1`)**: Passed (`INSMOD_RC=0`), staged 8,620 copy pages
+  (`Image` + `initramfs.gz` + `boot.dtb` at `payload_base=0x100000000`),
+  verified all symbols/devices/EL1, read live WDT registers (`en=3 bark=393180
+  bite=491475` = exact 12.0s / 15.0s), unloaded cleanly.
+- **4c (`preflight_only=2`)**: Passed (`INSMOD_RC=0`): `freeze_processes()=0`
+  -> `adreno_pm_suspend()=0` -> `syncboss_suspend()=0` (`MCU is asleep after
+  115ms`) -> clean resume/thaw/unload.
+- **4d (`preflight_only=3`)**: Passed (`INSMOD_RC=0`): full secondary CPU
+  hotplug down (`CPU1..7` killed via PSCI, `online=1`), **live EL1 MMU-off
+  physical roundtrip (`disabled SCTLR flags=0`)**, **live physical relocation
+  loop on scratch page**, clean CPU1..7 restoration (`online=8`), SyncBoss
+  resume, clean unload.
