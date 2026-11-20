@@ -1,0 +1,13 @@
+# Build artifacts and full kernel source trees - not our own work, too large
+kernel-src/
+kernel-target-src/
+android-out/
+target-out/
+baseline/
+preflight-capture/
+target/
+build.log
+target-build.log
+# Contains the real device's serial number embedded in bootargs
+live-fdt.dtb
+live-fdt-src/

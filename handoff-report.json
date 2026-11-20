@@ -1,0 +1,1867 @@
+{
+  "schema_version": 1,
+  "status": "HANDOFF_BLOCKED",
+  "ram": {
+    "window_bytes": 54525952,
+    "alignment_bytes": 4194304,
+    "candidates": [
+      {
+        "base": 4294967296,
+        "end": 4349493248,
+        "ownership": "unclaimed"
+      },
+      {
+        "base": 4349493248,
+        "end": 4404019200,
+        "ownership": "unclaimed"
+      },
+      {
+        "base": 4404019200,
+        "end": 4458545152,
+        "ownership": "unclaimed"
+      },
+      {
+        "base": 4458545152,
+        "end": 4513071104,
+        "ownership": "unclaimed"
+      },
+      {
+        "base": 4513071104,
+        "end": 4567597056,
+        "ownership": "unclaimed"
+      },
+      {
+        "base": 4567597056,
+        "end": 4622123008,
+        "ownership": "unclaimed"
+      },
+      {
+        "base": 4622123008,
+        "end": 4676648960,
+        "ownership": "unclaimed"
+      },
+      {
+        "base": 4676648960,
+        "end": 4731174912,
+        "ownership": "unclaimed"
+      }
+    ],
+    "exclusions": [
+      {
+        "start": 1048576,
+        "end": 3080192,
+        "reason": "iomem: cc_base"
+      },
+      {
+        "start": 4227072,
+        "end": 4231168,
+        "reason": "iomem: qcom,ipcc@408000"
+      },
+      {
+        "start": 7864320,
+        "end": 7884800,
+        "reason": "iomem: qfprom@780000"
+      },
+      {
+        "start": 8929280,
+        "end": 8945664,
+        "reason": "iomem: i2c@884000"
+      },
+      {
+        "start": 9175040,
+        "end": 9183232,
+        "reason": "iomem: qcom,qupv3_2_geni_se@8c0000"
+      },
+      {
+        "start": 10027008,
+        "end": 10043392,
+        "reason": "iomem: i2c@990000"
+      },
+      {
+        "start": 10223616,
+        "end": 10231808,
+        "reason": "iomem: qcom,qupv3_0_geni_se@9c0000"
+      },
+      {
+        "start": 11010048,
+        "end": 11026432,
+        "reason": "iomem: i2c@a80000"
+      },
+      {
+        "start": 11091968,
+        "end": 11108352,
+        "reason": "iomem: i2c@a94000"
+      },
+      {
+        "start": 11272192,
+        "end": 11280384,
+        "reason": "iomem: qcom,qupv3_1_geni_se@ac0000"
+      },
+      {
+        "start": 25694236,
+        "end": 25694240,
+        "reason": "iomem: sp2soc_irq_status"
+      },
+      {
+        "start": 25694244,
+        "end": 25694248,
+        "reason": "iomem: sp2soc_irq_clr"
+      },
+      {
+        "start": 25694248,
+        "end": 25694252,
+        "reason": "iomem: sp2soc_irq_mask"
+      },
+      {
+        "start": 25694268,
+        "end": 25694272,
+        "reason": "iomem: rmb_err"
+      },
+      {
+        "start": 25698324,
+        "end": 25698328,
+        "reason": "iomem: rmb_err_spare2"
+      },
+      {
+        "start": 30949376,
+        "end": 30961664,
+        "reason": "iomem: ufs_mem"
+      },
+      {
+        "start": 30961664,
+        "end": 30965248,
+        "reason": "iomem: phy_mem"
+      },
+      {
+        "start": 30998528,
+        "end": 31031296,
+        "reason": "iomem: ufs_ice"
+      },
+      {
+        "start": 63963136,
+        "end": 64225280,
+        "reason": "iomem: kgsl-3d0"
+      },
+      {
+        "start": 64552960,
+        "end": 64589824,
+        "reason": "iomem: cc_base"
+      },
+      {
+        "start": 64618496,
+        "end": 64684032,
+        "reason": "iomem: base"
+      },
+      {
+        "start": 64758272,
+        "end": 64758280,
+        "reason": "iomem: status-reg"
+      },
+      {
+        "start": 64758280,
+        "end": 64758288,
+        "reason": "iomem: status-reg"
+      },
+      {
+        "start": 64770048,
+        "end": 64774144,
+        "reason": "iomem: base"
+      },
+      {
+        "start": 64786432,
+        "end": 64790528,
+        "reason": "iomem: base"
+      },
+      {
+        "start": 143523840,
+        "end": 143532032,
+        "reason": "iomem: eud_base"
+      },
+      {
+        "start": 143532032,
+        "end": 143532036,
+        "reason": "iomem: eud_enable_reg"
+      },
+      {
+        "start": 143536128,
+        "end": 143536400,
+        "reason": "iomem: hsusb_phy_base"
+      },
+      {
+        "start": 143540224,
+        "end": 143540496,
+        "reason": "iomem: hsusb_phy_base"
+      },
+      {
+        "start": 143552512,
+        "end": 143552644,
+        "reason": "iomem: refgen-regulator@88e7000"
+      },
+      {
+        "start": 143571084,
+        "end": 143571088,
+        "reason": "iomem: pcs_clamp_enable_reg"
+      },
+      {
+        "start": 151605248,
+        "end": 151606016,
+        "reason": "iomem: lagg-base"
+      },
+      {
+        "start": 153092096,
+        "end": 154992640,
+        "reason": "iomem: llcc_base"
+      },
+      {
+        "start": 157286400,
+        "end": 157614080,
+        "reason": "iomem: llcc_broadcast_base"
+      },
+      {
+        "start": 159383552,
+        "end": 159449088,
+        "reason": "iomem: qdsp6ss"
+      },
+      {
+        "start": 159449088,
+        "end": 159514624,
+        "reason": "iomem: qdsp6ss_pll"
+      },
+      {
+        "start": 160956416,
+        "end": 161021952,
+        "reason": "iomem: cc"
+      },
+      {
+        "start": 174113024,
+        "end": 174119228,
+        "reason": "iomem: dwc3@a600000"
+      },
+      {
+        "start": 180289536,
+        "end": 180355072,
+        "reason": "iomem: cc_base"
+      },
+      {
+        "start": 181403648,
+        "end": 181469184,
+        "reason": "iomem: cc_base"
+      },
+      {
+        "start": 183500800,
+        "end": 183631872,
+        "reason": "iomem: cc_base"
+      },
+      {
+        "start": 183631872,
+        "end": 183697408,
+        "reason": "iomem: drv-0"
+      },
+      {
+        "start": 203563008,
+        "end": 203563012,
+        "reason": "iomem: tsens_srot_physical"
+      },
+      {
+        "start": 203567104,
+        "end": 203567108,
+        "reason": "iomem: tsens_srot_physical"
+      },
+      {
+        "start": 203829248,
+        "end": 203829759,
+        "reason": "iomem: tsens_tm_physical"
+      },
+      {
+        "start": 203833344,
+        "end": 203833348,
+        "reason": "iomem: pshold-base"
+      },
+      {
+        "start": 203837440,
+        "end": 203837951,
+        "reason": "iomem: tsens_tm_physical"
+      },
+      {
+        "start": 205561856,
+        "end": 205717504,
+        "reason": "iomem: cnfg"
+      },
+      {
+        "start": 205783040,
+        "end": 205787392,
+        "reason": "iomem: core"
+      },
+      {
+        "start": 207618048,
+        "end": 241172480,
+        "reason": "iomem: chnls"
+      },
+      {
+        "start": 241172480,
+        "end": 242221056,
+        "reason": "iomem: obsrvr"
+      },
+      {
+        "start": 242221056,
+        "end": 242876416,
+        "reason": "iomem: intr"
+      },
+      {
+        "start": 251658240,
+        "end": 268435456,
+        "reason": "iomem: pinctrl@f000000"
+      },
+      {
+        "start": 352321536,
+        "end": 353370112,
+        "reason": "iomem: base"
+      },
+      {
+        "start": 353903104,
+        "end": 353903112,
+        "reason": "iomem: status-reg"
+      },
+      {
+        "start": 353903112,
+        "end": 353903120,
+        "reason": "iomem: status-reg"
+      },
+      {
+        "start": 353903120,
+        "end": 353903128,
+        "reason": "iomem: status-reg"
+      },
+      {
+        "start": 353903128,
+        "end": 353903136,
+        "reason": "iomem: status-reg"
+      },
+      {
+        "start": 353903136,
+        "end": 353903144,
+        "reason": "iomem: status-reg"
+      },
+      {
+        "start": 353903144,
+        "end": 353903152,
+        "reason": "iomem: status-reg"
+      },
+      {
+        "start": 353903152,
+        "end": 353903160,
+        "reason": "iomem: status-reg"
+      },
+      {
+        "start": 353903160,
+        "end": 353903168,
+        "reason": "iomem: status-reg"
+      },
+      {
+        "start": 353903168,
+        "end": 353903176,
+        "reason": "iomem: status-reg"
+      },
+      {
+        "start": 353903176,
+        "end": 353903184,
+        "reason": "iomem: status-reg"
+      },
+      {
+        "start": 353914880,
+        "end": 353918976,
+        "reason": "iomem: base"
+      },
+      {
+        "start": 353931264,
+        "end": 353935360,
+        "reason": "iomem: base"
+      },
+      {
+        "start": 353947648,
+        "end": 353951744,
+        "reason": "iomem: base"
+      },
+      {
+        "start": 353964032,
+        "end": 353968128,
+        "reason": "iomem: base"
+      },
+      {
+        "start": 353980416,
+        "end": 353984512,
+        "reason": "iomem: base"
+      },
+      {
+        "start": 353996800,
+        "end": 354000896,
+        "reason": "iomem: base"
+      },
+      {
+        "start": 354013184,
+        "end": 354017280,
+        "reason": "iomem: base"
+      },
+      {
+        "start": 354029568,
+        "end": 354033664,
+        "reason": "iomem: base"
+      },
+      {
+        "start": 354045952,
+        "end": 354050048,
+        "reason": "iomem: base"
+      },
+      {
+        "start": 354062336,
+        "end": 354066432,
+        "reason": "iomem: base"
+      },
+      {
+        "start": 398524416,
+        "end": 398528512,
+        "reason": "iomem: msm-watchdog"
+      },
+      {
+        "start": 398594048,
+        "end": 398598144,
+        "reason": "iomem: arch_mem_timer"
+      },
+      {
+        "start": 404881408,
+        "end": 404946944,
+        "reason": "iomem: drv-2"
+      },
+      {
+        "start": 408489984,
+        "end": 408494080,
+        "reason": "iomem: freq-domain0"
+      },
+      {
+        "start": 408494080,
+        "end": 408498176,
+        "reason": "iomem: freq-domain1"
+      },
+      {
+        "start": 408498176,
+        "end": 408502272,
+        "reason": "iomem: freq-domain2"
+      },
+      {
+        "start": 1613758464,
+        "end": 1677721600,
+        "reason": "iomem: qcom,pcie@1c00000"
+      },
+      {
+        "start": 1613758464,
+        "end": 1615855616,
+        "reason": "iomem: PCI Bus 0000:01"
+      },
+      {
+        "start": 1613758464,
+        "end": 1614807040,
+        "reason": "iomem: 0000:01:00.0"
+      },
+      {
+        "start": 1613758464,
+        "end": 1614807040,
+        "reason": "iomem: cnss"
+      },
+      {
+        "start": 1615855616,
+        "end": 1617952768,
+        "reason": "iomem: PCI Bus 0000:01"
+      },
+      {
+        "start": 1617952768,
+        "end": 1617956864,
+        "reason": "iomem: 0000:00:00.0"
+      },
+      {
+        "start": 2610954240,
+        "end": 2611544064,
+        "reason": "iomem: reserved"
+      },
+      {
+        "start": 2617245696,
+        "end": 2654994432,
+        "reason": "iomem: reserved"
+      },
+      {
+        "start": 2684878848,
+        "end": 2712272896,
+        "reason": "iomem: Kernel code"
+      },
+      {
+        "start": 2712272896,
+        "end": 2713387008,
+        "reason": "iomem: reserved"
+      },
+      {
+        "start": 2713387008,
+        "end": 2716147712,
+        "reason": "iomem: Kernel data"
+      },
+      {
+        "start": 2948005888,
+        "end": 2948526080,
+        "reason": "iomem: reserved"
+      },
+      {
+        "start": 2950107136,
+        "end": 2952785920,
+        "reason": "iomem: reserved"
+      },
+      {
+        "start": 3967811584,
+        "end": 4290772992,
+        "reason": "iomem: reserved"
+      },
+      {
+        "start": 8481931264,
+        "end": 8485076992,
+        "reason": "iomem: reserved"
+      },
+      {
+        "start": 8485924864,
+        "end": 8585740288,
+        "reason": "iomem: reserved"
+      },
+      {
+        "start": 8585793536,
+        "end": 8586711040,
+        "reason": "iomem: reserved"
+      },
+      {
+        "start": 8586719232,
+        "end": 8586723328,
+        "reason": "iomem: reserved"
+      },
+      {
+        "start": 8586723328,
+        "end": 8586727424,
+        "reason": "iomem: reserved"
+      },
+      {
+        "start": 8586727424,
+        "end": 8586739712,
+        "reason": "iomem: reserved"
+      },
+      {
+        "start": 8586739712,
+        "end": 8589930496,
+        "reason": "iomem: reserved"
+      },
+      {
+        "start": 8589930496,
+        "end": 8589934592,
+        "reason": "iomem: reserved"
+      },
+      {
+        "start": 0,
+        "end": 4294967295,
+        "reason": "Unresolved dynamic allocation limits: /reserved-memory/adsp_region"
+      },
+      {
+        "start": 0,
+        "end": 4294967295,
+        "reason": "Unresolved dynamic allocation limits: /reserved-memory/cdsp_region"
+      },
+      {
+        "start": 0,
+        "end": 4294967295,
+        "reason": "Unresolved dynamic allocation limits: /reserved-memory/cnss_wlan_region"
+      },
+      {
+        "start": 2617245696,
+        "end": 2653945856,
+        "reason": "DT reserved: /reserved-memory/cont_splash_region@9c000000"
+      },
+      {
+        "start": 2653945856,
+        "end": 2654994432,
+        "reason": "DT reserved: /reserved-memory/dfps_data_region@9e300000"
+      },
+      {
+        "start": 2147483648,
+        "end": 2153775104,
+        "reason": "DT reserved: /reserved-memory/hyp_region@80000000"
+      },
+      {
+        "start": 0,
+        "end": 4294967295,
+        "reason": "Unresolved dynamic allocation limits: /reserved-memory/linux,cma"
+      },
+      {
+        "start": 0,
+        "end": 4294967295,
+        "reason": "Unresolved dynamic allocation limits: /reserved-memory/mailbox_region"
+      },
+      {
+        "start": 2316304384,
+        "end": 2346713088,
+        "reason": "DT reserved: /reserved-memory/pil_adsp_region@8a100000"
+      },
+      {
+        "start": 2250244096,
+        "end": 2255486976,
+        "reason": "DT reserved: /reserved-memory/pil_camera_region@86200000"
+      },
+      {
+        "start": 2273312768,
+        "end": 2294284288,
+        "reason": "DT reserved: /reserved-memory/pil_cdsp_region@87800000"
+      },
+      {
+        "start": 2268069888,
+        "end": 2273312768,
+        "reason": "DT reserved: /reserved-memory/pil_cvp_region@87300000"
+      },
+      {
+        "start": 2256642048,
+        "end": 2256650240,
+        "reason": "DT reserved: /reserved-memory/pil_gpu_region@8681a000"
+      },
+      {
+        "start": 2257584128,
+        "end": 2262827008,
+        "reason": "DT reserved: /reserved-memory/pil_npu_region@86900000"
+      },
+      {
+        "start": 2346713088,
+        "end": 2347761664,
+        "reason": "DT reserved: /reserved-memory/pil_spss_region@8be00000"
+      },
+      {
+        "start": 2262827008,
+        "end": 2268069888,
+        "reason": "DT reserved: /reserved-memory/pil_video_region@86e00000"
+      },
+      {
+        "start": 0,
+        "end": 4294967295,
+        "reason": "Unresolved dynamic allocation limits: /reserved-memory/qseecom_region"
+      },
+      {
+        "start": 0,
+        "end": 4294967295,
+        "reason": "Unresolved dynamic allocation limits: /reserved-memory/qseecom_ta_region"
+      },
+      {
+        "start": 2610954240,
+        "end": 2611544064,
+        "reason": "DT reserved: /reserved-memory/ramoops"
+      },
+      {
+        "start": 2159017984,
+        "end": 2214592512,
+        "reason": "DT reserved: /reserved-memory/removed_region@80b00000"
+      },
+      {
+        "start": 2156396544,
+        "end": 2156478464,
+        "reason": "DT reserved: /reserved-memory/res_xbl_uefi_log_region@80880000"
+      },
+      {
+        "start": 2156265472,
+        "end": 2156396544,
+        "reason": "DT reserved: /reserved-memory/reserved-memory@80860000"
+      },
+      {
+        "start": 0,
+        "end": 4294967295,
+        "reason": "Unresolved dynamic allocation limits: /reserved-memory/sdsp_region"
+      },
+      {
+        "start": 0,
+        "end": 4294967295,
+        "reason": "Unresolved dynamic allocation limits: /reserved-memory/secure_display_region"
+      },
+      {
+        "start": 2156920832,
+        "end": 2159017984,
+        "reason": "DT reserved: /reserved-memory/smem_region@80900000"
+      },
+      {
+        "start": 0,
+        "end": 4294967295,
+        "reason": "Unresolved dynamic allocation limits: /reserved-memory/sp_region"
+      },
+      {
+        "start": 0,
+        "end": 4294967295,
+        "reason": "Unresolved dynamic allocation limits: /reserved-memory/user_contig_region"
+      },
+      {
+        "start": 2154823680,
+        "end": 2156265472,
+        "reason": "DT reserved: /reserved-memory/xbl_aop_region@80700000"
+      }
+    ],
+    "blockers": [],
+    "scope": "Snapshot candidates only; native allocator claim still required"
+  },
+  "payload": {
+    "status": "MISSING_INPUTS",
+    "candidates": [],
+    "blockers": [
+      "Supply an Image, initramfs and one DTB for copy sizing"
+    ]
+  },
+  "dma": {
+    "clients": [
+      {
+        "node": "/soc/apps_iommu_coherent_test_device",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              35,
+              0
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/apps_iommu_test_device",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              33,
+              0
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/kgsl_iommu_coherent_test_device",
+        "iommus": [
+          {
+            "provider": "/soc/kgsl-smmu@3da0000",
+            "args": [
+              9,
+              0
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/kgsl_iommu_test_device",
+        "iommus": [
+          {
+            "provider": "/soc/kgsl-smmu@3da0000",
+            "args": [
+              7,
+              0
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcedev@1de0000",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              1414,
+              17
+            ]
+          },
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              1430,
+              17
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcedev@1de0000/qcom_cedev_ns_cb",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              1426,
+              0
+            ]
+          },
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              1432,
+              0
+            ]
+          },
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              1433,
+              0
+            ]
+          },
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              1439,
+              0
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcedev@1de0000/qcom_cedev_s_cb",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              1427,
+              0
+            ]
+          },
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              1436,
+              0
+            ]
+          },
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              1437,
+              0
+            ]
+          },
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              1438,
+              0
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,cam_smmu/msm_cam_icp_fw",
+        "iommus": [],
+        "memory_regions": [
+          "/reserved-memory/pil_camera_region@86200000"
+        ],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,cam_smmu/msm_cam_smmu_cpas_cdm",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              8384,
+              1024
+            ]
+          },
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              9408,
+              1024
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,cam_smmu/msm_cam_smmu_icp",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              8418,
+              1024
+            ]
+          },
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              9442,
+              1024
+            ]
+          },
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              8192,
+              1024
+            ]
+          },
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              8193,
+              1024
+            ]
+          },
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              9216,
+              1024
+            ]
+          },
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              9217,
+              1024
+            ]
+          },
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              8288,
+              1024
+            ]
+          },
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              8289,
+              1024
+            ]
+          },
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              9312,
+              1024
+            ]
+          },
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              9313,
+              1024
+            ]
+          },
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              8224,
+              1024
+            ]
+          },
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              8225,
+              1024
+            ]
+          },
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              9248,
+              1024
+            ]
+          },
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              9249,
+              1024
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,cam_smmu/msm_cam_smmu_ife",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              2048,
+              1024
+            ]
+          },
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              2049,
+              1024
+            ]
+          },
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              2112,
+              1024
+            ]
+          },
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              2113,
+              1024
+            ]
+          },
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              3072,
+              1024
+            ]
+          },
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              3073,
+              1024
+            ]
+          },
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              3136,
+              1024
+            ]
+          },
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              3137,
+              1024
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,cam_smmu/msm_cam_smmu_jpeg",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              8256,
+              1024
+            ]
+          },
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              9280,
+              1024
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,cvp@ab00000/cvp_non_secure_cb",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              8480,
+              1024
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,cvp@ab00000/cvp_secure_nonpixel_cb",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              8484,
+              1024
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,cvp@ab00000/cvp_secure_pixel_cb",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              8483,
+              1024
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,cvp@ab00000/qcom,msm-cvp,mem_cdsp",
+        "iommus": [],
+        "memory_regions": [
+          "/reserved-memory/cdsp_region"
+        ],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,cvpss@abb0000",
+        "iommus": [],
+        "memory_regions": [
+          "/reserved-memory/pil_cvp_region@87300000"
+        ],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,gmu@3d6a000/gmu_kernel",
+        "iommus": [
+          {
+            "provider": "/soc/kgsl-smmu@3da0000",
+            "args": [
+              5,
+              1024
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,gmu@3d6a000/gmu_user",
+        "iommus": [
+          {
+            "provider": "/soc/kgsl-smmu@3da0000",
+            "args": [
+              4,
+              1024
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,gpi-dma@800000",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              118,
+              0
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,gpi-dma@900000",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              1462,
+              0
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,gpi-dma@a00000",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              86,
+              0
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,ion/qcom,ion-heap@10",
+        "iommus": [],
+        "memory_regions": [
+          "/reserved-memory/secure_display_region"
+        ],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,ion/qcom,ion-heap@13",
+        "iommus": [],
+        "memory_regions": [
+          "/reserved-memory/sp_region"
+        ],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,ion/qcom,ion-heap@19",
+        "iommus": [],
+        "memory_regions": [
+          "/reserved-memory/qseecom_ta_region"
+        ],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,ion/qcom,ion-heap@22",
+        "iommus": [],
+        "memory_regions": [
+          "/reserved-memory/sdsp_region"
+        ],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,ion/qcom,ion-heap@26",
+        "iommus": [],
+        "memory_regions": [
+          "/reserved-memory/user_contig_region"
+        ],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,ion/qcom,ion-heap@27",
+        "iommus": [],
+        "memory_regions": [
+          "/reserved-memory/qseecom_region"
+        ],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,kgsl-iommu@3da0000/gfx3d_secure",
+        "iommus": [
+          {
+            "provider": "/soc/kgsl-smmu@3da0000",
+            "args": [
+              2,
+              1024
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,kgsl-iommu@3da0000/gfx3d_user",
+        "iommus": [
+          {
+            "provider": "/soc/kgsl-smmu@3da0000",
+            "args": [
+              0,
+              1025
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,lpass@17300000",
+        "iommus": [],
+        "memory_regions": [
+          "/reserved-memory/pil_adsp_region@8a100000"
+        ],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,mdss_dsi_pll@ae94900",
+        "iommus": [],
+        "memory_regions": [
+          "/reserved-memory/dfps_data_region@9e300000"
+        ],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,mdss_mdp@ae00000/qcom,smmu_sde_sec_cb",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              2081,
+              1024
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,mdss_mdp@ae00000/qcom,smmu_sde_unsec_cb",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              2080,
+              1026
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,msm-adsprpc-mem",
+        "iommus": [],
+        "memory_regions": [
+          "/reserved-memory/adsp_region"
+        ],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,msm-audio-apr/qcom,msm-audio-ion",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              6145,
+              0
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,msm_fastrpc/qcom,msm_fastrpc_compute_cb1",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              4097,
+              1120
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,msm_fastrpc/qcom,msm_fastrpc_compute_cb10",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              6147,
+              0
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,msm_fastrpc/qcom,msm_fastrpc_compute_cb11",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              6148,
+              0
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,msm_fastrpc/qcom,msm_fastrpc_compute_cb12",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              6149,
+              0
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,msm_fastrpc/qcom,msm_fastrpc_compute_cb13",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              1345,
+              0
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,msm_fastrpc/qcom,msm_fastrpc_compute_cb14",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              1346,
+              0
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,msm_fastrpc/qcom,msm_fastrpc_compute_cb15",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              1347,
+              0
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,msm_fastrpc/qcom,msm_fastrpc_compute_cb2",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              4098,
+              1120
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,msm_fastrpc/qcom,msm_fastrpc_compute_cb3",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              4099,
+              1120
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,msm_fastrpc/qcom,msm_fastrpc_compute_cb4",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              4100,
+              1120
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,msm_fastrpc/qcom,msm_fastrpc_compute_cb5",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              4101,
+              1120
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,msm_fastrpc/qcom,msm_fastrpc_compute_cb6",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              4102,
+              1120
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,msm_fastrpc/qcom,msm_fastrpc_compute_cb7",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              4103,
+              1120
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,msm_fastrpc/qcom,msm_fastrpc_compute_cb8",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              4104,
+              1120
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,msm_fastrpc/qcom,msm_fastrpc_compute_cb9",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              4105,
+              1120
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,msm_npu@9800000",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              4225,
+              1024
+            ]
+          },
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              4226,
+              1024
+            ]
+          },
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              4257,
+              1024
+            ]
+          },
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              4258,
+              1024
+            ]
+          },
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              4289,
+              1024
+            ]
+          },
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              4290,
+              1024
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,npu@9800000",
+        "iommus": [],
+        "memory_regions": [
+          "/reserved-memory/pil_npu_region@86900000"
+        ],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,pcie@1c00000/pcie0_rp/cnss_pci",
+        "iommus": [],
+        "memory_regions": [
+          "/reserved-memory/cnss_wlan_region"
+        ],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,qupv3_0_geni_se@9c0000",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              1443,
+              0
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,qupv3_1_geni_se@ac0000",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              67,
+              0
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,qupv3_2_geni_se@8c0000",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              99,
+              0
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,smem",
+        "iommus": [],
+        "memory_regions": [
+          "/reserved-memory/smem_region@80900000"
+        ],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,spss@1880000",
+        "iommus": [],
+        "memory_regions": [
+          "/reserved-memory/pil_spss_region@8be00000"
+        ],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,turing@8300000",
+        "iommus": [],
+        "memory_regions": [
+          "/reserved-memory/pil_cdsp_region@87800000"
+        ],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,venus@aab0000",
+        "iommus": [],
+        "memory_regions": [
+          "/reserved-memory/pil_video_region@86e00000"
+        ],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,vidc@aa00000/non_secure_cb",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              8448,
+              1024
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,vidc@aa00000/secure_bitstream_cb",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              8449,
+              1028
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,vidc@aa00000/secure_non_pixel_cb",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              8452,
+              1024
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcom,vidc@aa00000/secure_pixel_cb",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              8451,
+              1024
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qcrypto@1de0000",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              1412,
+              17
+            ]
+          },
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              1428,
+              17
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/qseecom@82400000",
+        "iommus": [],
+        "memory_regions": [
+          "/reserved-memory/qseecom_region"
+        ],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/slim@3ac0000",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              6182,
+              0
+            ]
+          },
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              6191,
+              0
+            ]
+          },
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              6192,
+              1
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/spf_core_platform/qcom,msm-audio-ion-ar",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              6145,
+              0
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/spf_core_platform/qcom,voice-mhi-audio-ar",
+        "iommus": [],
+        "memory_regions": [
+          "/reserved-memory/mailbox_region"
+        ],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/ssusb@a600000",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              0,
+              0
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      },
+      {
+        "node": "/soc/usb_audio_qmi_dev",
+        "iommus": [
+          {
+            "provider": "/soc/apps-smmu@15000000",
+            "args": [
+              6159,
+              0
+            ]
+          }
+        ],
+        "memory_regions": [],
+        "state": "unproven"
+      }
+    ],
+    "quiesced": false,
+    "scope": "DT references only; not a complete inventory of DMA masters or live mappings",
+    "blockers": [
+      "Device-specific stop, completion, secure ownership and recovery remain unproven"
+    ]
+  }
+}

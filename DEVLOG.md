@@ -1,0 +1,567 @@
+# Quest 2 kexec — independent development log
+
+Device: Meta Quest 2 (hollywood), firmware `UP1A.231005.007.A1`, build
+`52242990024200150`, kernel `4.19.325-cip128-st12-g49638c7a8637`, Magisk root,
+bootloader locked (`ro.boot.verifiedbootstate=green`, `ro.boot.flash.locked=1`).
+
+Based on `WitherBlitz/Quest-2-Steam-OS-Dual-Boot` (fork of
+`machachu56/quest-kexec-q2`), whose documented development identity matches
+this device exactly.
+
+## What we ruled out first
+
+- **Bootloader unlock**: CVE-2021-1931 only works on firmware ≤ May 2021; this
+  device is far newer. No public exploit found.
+- **Qualcomm EDL route**: entering EDL works (`adb reboot edl` →
+  `05c6:9008`). Sahara handshake succeeds and reaches image transfer, but two
+  generic SM8250 loaders (BlackShark-signed, from the `hoplik/Firehose-Finder`
+  catalog) both failed partway through transfer — one via repeated I/O errors
+  + USB reset, one via a silent stop right after the signature-bearing chunk
+  was sent. No Meta-signed Firehose loader exists publicly. Treated as a dead
+  end without one.
+- **OpenABL direct-write route**: writes `abl_a`/`abl_b` via root `dd`,
+  bypassing fastboot's lock check — but Quest 2's secure-boot chain
+  (`verifiedbootstate=green`) almost certainly rejects an unsigned ABL at the
+  XBL level, with no known Meta-signed EDL loader to recover via if it does.
+  Never attempted on this (only) device.
+
+## What we built ourselves
+
+1. **Android kernel source**: `facebookincubator/oculus-linux-kernel` at
+   `6bde5fc06b252c97761bc0963dd13c1abcf377ab` — confirmed by its own commit
+   message ("Oculus Quest 2 kernel project build: 5224299.2420.150") to be the
+   exact source for our firmware build.
+2. Patched `scripts/extract-cert.c` to drop OpenSSL ENGINE/pkcs11 support
+   (unneeded; OpenSSL 3/4.x on this host removed the deprecated ENGINE API).
+3. Built `vmlinux` + `modules_prepare` only (not full `modules` — avoids the
+   entire qcacld-3.0 Wi-Fi staging driver, which doesn't compile cleanly
+   under modern clang's strictness defaults). Derived `Module.symvers` via
+   `modpost` directly from `vmlinux`.
+   - **11,137 exports** — exact match to the project's own documented
+     reference count. Strong independent confirmation the build is correct.
+4. Built `quest_kexec.ko` / `marker_read.ko` out-of-tree against that
+   `Module.symvers`, **without** `QKX_EXPERIMENTAL=1` — meaning
+   `QKX_ENABLE_EXPERIMENTAL_JUMP` is undefined and the real jump path
+   (`execute`, CPU/GPU rehearsals, watchdog/core-hang/secure-watchdog
+   control, QMP/Syncboss/RPMH hooks) is **compile-time absent**. Verified
+   directly in `loader.c`: all of those parameters are hard-rejected with
+   `-EOPNOTSUPP` before any symbol resolution or hardware access, in a build
+   like ours.
+   - `vermagic` matched the running kernel exactly on the first build.
+
+## On-hardware results (all via `validate_ram=1` — claim-and-release only,
+no payload, no shutdown, same mechanism the project's own prior tests used)
+
+Ran their read-only `quest2_preflight.py` capture (identity matched exactly)
+and `quest2_handoff_plan.py` planner against it — produced the same 8
+candidate 52 MiB windows above 4 GiB their own planner found.
+
+| Candidate | Base | 52 MiB result | 36 MiB result |
+|---|---|---|---|
+| 1 | `0x100000000` | (not retried; known busy ~44 MiB in) | **owned=1** ✅ |
+| 2 | `0x103400000` | refused, PFN `0x105c00` unsupported pageblock | **owned=1** ✅ |
+| 3 | `0x106800000` | refused, PFN `0x107400` | refused |
+| 4 | `0x109c00000` | refused, PFN `0x10b800` | refused |
+| 5 | `0x10d000000` | refused, PFN `0x10f800` | **owned=1** ✅ |
+| 6 | `0x110400000` | refused, PFN `0x112800` | refused (unmovable block at `0x110800`) |
+| 7 | `0x113800000` | refused, PFN `0x113800` | refused |
+| 8 | `0x116c00000` | refused, PFN `0x118800` | refused |
+
+Three independently verified safe 36 MiB claim/release windows. Device fully
+healthy after every attempt — no panic/BUG/WARNING/oops/fault anywhere in
+dmesg, `sys.boot_completed` stayed `1` throughout, taint transitioned cleanly
+`1028 → 5124` (expected out-of-tree-module flag) and back on unload.
+
+This closes out the project's own open item: *"the other seven candidates
+remain untested."*
+
+## Target Linux payload (built, not yet staged)
+
+- Copied kernel source to a separate git-tracked tree
+  (`kernel-target-src`), applied both `kernel/patches/quest2-startup/*`
+  patches via `git apply` — base and post-patch hashes verified byte-for-byte
+  against the project's own reviewed values before and after.
+- Built target `Image` (31.8 MB) from their `target.config`
+  (hash-verified against their release asset).
+- Built static ARM64 BusyBox (`busybox.net`, pinned 1.36.1) + initramfs
+  (1.14 MB) via the project's own `initramfs/busybox.sh` + `build.py`.
+- Flattened our own preflight capture's live device tree with `dtc -I fs -O
+  dtb` (built as a side effect of the kernel build).
+- Ran `tools/quest2_target_dtb.py` with a corrected provenance file (their
+  released `target-build-provenance.json`'s file hashes are for *their*
+  build; ours differ since it's a different compiler/environment, matching
+  their own stated "not a cross-machine rebuild claim" caveat — rebuilt the
+  provenance's `files` section with our actual hashes, kept every other
+  pinned field identical since the patches/source hashes matched exactly).
+  - Result: **`PRIVATE_DTB_PREPARED; HANDOFF_BLOCKED; 0 structural/profile
+    findings`**.
+  - Recommended base: `0x100000000` — same window as our already-verified
+    candidate 1.
+
+## Next: `payload_base` staging test
+
+Traced `loader.c` function-by-function before running anything:
+`qkx_claim_destination()` (the only function that touches the real
+destination physical range) is only called when `execute` is set — which is
+impossible in our build. `qkx_stage()` only ever reads file bytes into
+freshly, ordinarily allocated scratch pages (`qkx_page()` → `alloc_page()`),
+explicitly skipping any page that happens to physically fall inside the
+destination window. `qkx_identity_map()` likewise only builds a private page
+table inside scratch pages — never installs it, never touches the live
+kernel's page tables. `qkx_release()`, called on any init error and
+unconditionally on `rmmod`, frees every page the module ever allocated.
+
+Conclusion: a `payload_base`-only run (no `execute`) never touches, claims,
+or writes to the real destination RAM at all. Smaller real-world footprint
+than the `validate_ram` tests already run three times successfully.
+
+## Staging test result (2026-11-20)
+
+Pushed `Image`/`initramfs.gz`/`boot.dtb` to `/data/local/tmp/`, hashes
+verified matching on-device before load.
+
+```
+insmod quest_kexec.ko payload_base=0x100000000 image=... initrd=... dtb=...
+→ INSMOD_EXIT=0
+quest_kexec: segment dest=100080000 file=31838983 memory=33656832 crc32=c0c4abac
+quest_kexec: segment dest=102099000 file=1141452 memory=1142784 crc32=cdf4e29c
+quest_kexec: segment dest=1021b0000 file=506829 memory=507904 crc32=f757ab5f
+quest_kexec: staged 8620 copy pages, 8665 allocations; entry=100080000 dtb=1021b0000; execute=0
+```
+
+All three CRC32s independently verified against our local files (zlib.crc32)
+— exact match, confirming bit-correct staging.
+
+`rmmod` → `quest_kexec: unloaded; staging memory released`. Module gone from
+`lsmod`. No panic/BUG/WARNING/oops/fault anywhere in dmesg. `boot_completed=1`
+throughout, uptime continuous (no reboot), taint `5124` (expected, clears on
+reboot).
+
+**Status: real kernel+initramfs+DTB payload staged and verified in scratch
+memory on real hardware, with the actual destination RAM window never
+touched. This is the furthest point reachable without `QKX_EXPERIMENTAL=1`
+— the real jump path remains compile-time absent in every module we've
+built.**
+
+## QKX_EXPERIMENTAL=1 test (2026-11-20)
+
+Rebuilt with `QKX_EXPERIMENTAL=1`. Confirmed via `strings`/`nm` that the old
+compile-time refusal string is gone and `qkx_execute` is now a real symbol —
+the jump path is genuinely compiled in this time, not just claimed.
+
+Read `qkx_dma_gate()` in full before testing:
+```c
+static int qkx_dma_gate(void)
+{
+    const char *model;
+    if (of_property_read_string(of_root, "model", &model))
+        return -ENODEV;
+    if (!strncmp(model, "Hollywood", 9)) {
+        pr_err("quest_kexec: Hollywood DMA shutdown/completion is unvalidated; refusing hardware transition\n");
+        return -EOPNOTSUPP;
+    }
+    return 0;
+}
+```
+Pure DT string read, zero side effects, called before `qkx_resolve()` and any
+hardware access, independent of the compile flag.
+
+Tested `insmod quest_kexec.ko execute=1` on-device:
+```
+insmod: failed to load ...: Operation not supported on transport endpoint
+dmesg: quest_kexec: Hollywood DMA shutdown/completion is unvalidated; refusing hardware transition
+```
+Module never loaded (`lsmod` empty). No panic/BUG/WARNING/fault. Device
+healthy, uptime continuous.
+
+**Confirmed, not just documented: the board gate refuses the real jump path
+on this device even with the experimental flag compiled in.** Going further
+would require editing/removing this specific check — a deliberate act against
+an explicit, reasoned safety boundary, not a flag flip. Not attempted; not
+planned without a real solution to the DMA/camera/SMMU teardown problem this
+gate exists to enforce.
+
+## Option 2: moving toward overpressure / Valve's 7.2 kernel (2026-11-20, continued)
+
+Not waiting on URFAVF3MBOY's answer to issue #7/#34 — starting this
+ourselves, following the `overpressure/phoenix` (PICO 4) pattern as the
+worked example, since PICO 4 and Quest 2 share the SM8250/XR2 SoC.
+
+### Layering model (from `overpressure/phoenix/docs/kernel.md`)
+
+`overpressure/linux` builds Valve's `linux-valve` 7.2.0 in layers, each a
+branch built on the one below, merged by PR, never rebased:
+- `valve/7.2` — mirror of Valve's own tree (weekly, via evlaV)
+- `common/7.2` — fixes any headset on Valve's tree needs (DDR info, root
+  identity, BCL, Bluetooth firmware wait, DSP handover, FastRPC, PSCI reset,
+  CI)
+- `sm8250/7.2` — SM8250-generic: Venus (video codec), CAMSS, A650 GPU
+  preemption, DPU 6.0 refresh changes — **already shared infrastructure, no
+  Quest-2-specific work needed here**
+- `phoenix/7.2` — PICO 4 only: panel, battery, tracking/RGB camera drivers,
+  audio, device tree, `pico4.config`
+
+A `hollywood/7.2` layer on top of `sm8250/7.2` is exactly where
+`overpressure/overpressure#34` already suggests Quest 2 would go.
+
+**Major overlap with PICO 4, already solved by someone:**
+- **QCA6390 Wi-Fi/Bluetooth** — identical chip to PICO 4. Phoenix uses
+  `ath11k` + `hci_qca`, PICO's firmware/NV data from their `bluetooth`
+  partition. `quest2-steamos` already has working QCA6390 Bluetooth patches
+  on the *vendor* kernel (`patches/q2-bt-hci-qca-ldisc.patch`) — real
+  reference for NVM/baud-rate/sleep-bit quirks that should translate.
+
+### Key find: Meta published the real Quest 2 device tree source
+
+`facebookincubator/oculus-linux-kernel` (which we already have in full, see
+above) contains the actual, maintained, per-subsystem Linux DTS for
+"hollywood" at `arch/arm64/boot/dts/oculus/hollywood/`:
+`hollywood.dtsi` (main board), `hollywood-panel.dtsi` + 15 panel-timing
+variants (sharp/jdi/jdi-nvt/boe × 72/80/90/120 Hz), `hollywood-qca6390.dtsi`,
+`hollywood-syncboss.dtsi`, `hollywood-camera.dtsi`, `hollywood-audio.dtsi`,
+`hollywood-ufs.dtsi`, `hollywood-thermal.dtsi`, `hollywood-fan.dtsi`,
+`hollywood-adc.dtsi`, battery profile dtsi files, board-revision overlays
+(evt1/evt2/evt/dvt/poc2/p1.1/pvt-b); base platform layer
+`kona-v2-oculus.dts`/`kona-v2.1-oculus.dts`.
+
+This is **categorically better than what PICO 4's port had** — phoenix's own
+docs say PICO's vendor kernel source was never published, forcing
+reverse-engineering by hardware testing (their own doc: *"1.904 V stalls CPU
+0 (hard lockup); the tree uses 1.896 V"* — found by trial and error, not
+documentation). We have the real, intentional, documented answer already.
+
+Spot-checked `hollywood-qca6390.dtsi`: exact GPIO wiring for Bluetooth
+(`BT_EN`=tlmm21, `SW_CTRL`=tlmm124, `WL_EN`=tlmm20) and regulator voltage
+rails (S6A/S5A/S8C at specific mV). `hollywood.dtsi` also reveals the fuel
+gauge is `ti,bq27z561` on `qupv3_se4_i2c` — **TI's BQ27xxx family has a
+well-supported mainline driver** (`drivers/power/supply/bq27xxx_battery.c`),
+unlike PICO 4 which needed a brand-new PM8150B driver written from scratch.
+Battery monitoring may need device-tree wiring only, not a new driver.
+
+`hollywood-syncboss.dtsi` confirms SPI-based tracking MCU with explicit GPIO
+wiring (wakeup=GPIO4, reset=GPIO5, float_swd=GPIO52/53) — corroborates
+`quest2-steamos`'s own kexec notes (`"Syncboss is spi1.0"`) and our own live
+device-tree capture from tonight, three independent sources agreeing.
+
+Secondary source checked: `meowybnuuy/android_device_oculus_hollywood`
+(AOSP/TWRP device config, stale at Android 12.1, not a kernel DTS). Useful
+only as corroboration: A/B partition scheme, boot image header v2,
+`androidboot.hardware=hollywood`, kernel cmdline fragments — all consistent
+with what we already know. Not a device-tree source despite the name.
+
+### Honest scope assessment
+
+Device-tree/board-wiring risk is now substantially lower than a from-scratch
+port — it's translation (downstream Qualcomm/Oculus DTS idioms →
+mainline/mainline-adjacent idioms Valve's tree uses) against real, documented
+source, not reverse-engineering. The dominant remaining effort is still
+driver work matching what phoenix/7.2's own commit list needed for PICO:
+a panel driver, a SyncBoss (tracking MCU) driver, audio bring-up — genuine
+multi-week kernel engineering, but with meaningfully less unknown risk than
+initially scoped, and with `quest2-steamos`'s existing vendor-kernel work as
+a second cross-check for several of these subsystems.
+
+### Repo work started
+
+- Cloned `overpressure/overpressure`, `overpressure/phoenix`,
+  `overpressure/headset-template` for reference.
+- Fetched `overpressure/linux` at `sm8250/7.2` (shallow, single branch).
+- Not yet scaffolded `overpressure/hollywood` from the template — next step.
+
+## DMA/camera/SMMU teardown research (kexec-safety problem)
+
+Resumed the kexec angle specifically to investigate what it would take to
+safely quiesce camera/ADSP/SMMU DMA before a real jump — the thing
+`qkx_dma_gate()` currently refuses to allow for Hollywood, precisely because
+nobody has solved it.
+
+**`shutdown.c`/`shutdown.h` in the WitherBlitz module is a generic
+transactional orchestrator, not a solution.** It defines a clean
+forward/rollback contract (deadlines, receipts, per-subsystem "backends"
+with inspect/begin/poll/rollback hooks) across ten subsystems (camera, DSP,
+GPU, SyncBoss, USB, UFS, other-DMA, SMMU, secure, AOP). But grepping the
+whole repo, the only place any `qkx_shutdown_backend` gets populated is
+`tools/tests/shutdown_harness.c` — a **host-side unit test with mock
+backends**. No real camera/ADSP/SMMU-touching backend exists anywhere.
+The hard part (the actual device-specific shutdown+verification code) is a
+complete blank slate, even in this most advanced known attempt.
+
+Checked three real subsystems in Meta's own kernel source for what
+shutdown/completion primitives actually exist to build real backends on:
+
+- **Camera (`cam_req_mgr_dev.c`)**: `cam_req_mgr_close()` is a plain v4l2
+  file-release callback, gated by a simple (non-atomic) `open_cnt` — runs
+  automatically when the last userspace fd closes or its owning process
+  dies. This means the "how do we stop it" half is already solved by
+  Android's normal process/fd lifecycle (every reboot does this). But no
+  independent "zero DMA in flight" signal was found: `cam_ife_hw_mgr.c`'s
+  only similar-looking flag (`overflow_pending`) is a hardware-overflow
+  *error* indicator, not an idle/done flag. Trusting `close()` alone means
+  trusting the driver did its job completely, with no second check.
+- **SMMU (`arm-smmu-debug.c`)**: has real TBU/TCU hardware test-bus register
+  access (`arm_smmu_debug_tbu_testbus_select/output`), which could in
+  principle reveal outstanding-transaction state — but interpreting the
+  test-bus output requires vendor-internal bit-encoding documentation this
+  tree doesn't include. Not usable without that, short of risky
+  trial-and-error on the only unit we have.
+- **ADSP/CDSP/SLPI (`subsystem_restart.c`)**: the real win. `subsys_stop()`
+  does `notify_each_subsys_device(..., SUBSYS_BEFORE_SHUTDOWN, ...)`, then
+  `sysmon_send_shutdown()` — a **synchronous, two-way IPC handshake with the
+  remote firmware itself**, giving the DSP's own software a chance to idle
+  its own DMA before the AP does anything hardware-level — then the PIL
+  `shutdown()` callback (the actual reset-assert), then only *after* all of
+  that, `SUBSYS_AFTER_SHUTDOWN` fires. This is genuine, checkable completion
+  evidence (a real return code from a real firmware round-trip), not a
+  hopeful one-way call. Qualcomm's existing `subsystem_restart` API
+  (`subsystem_put()`) already does this correctly — no new mechanism needs
+  inventing here, just correct wiring plus actually checking
+  `sysmon_shutdown_ret` instead of ignoring it.
+
+### Honest standing
+
+Of the three subsystems checked, only ADSP/CDSP/SLPI has a trustworthy,
+already-built completion signal. Camera's existing close path is usable but
+unverified-complete. SMMU's debug path exists but is unusable without
+documentation we don't have. GPU, UFS, USB, SyncBoss, secure/TZ, and AOP are
+still completely unexamined. This is real, incremental de-risking of one
+subsystem out of ten — not a solved problem. Building real backends for the
+remaining subsystems, and deciding what to do about camera/SMMU's weaker
+evidence, is still open, multi-session kernel research.
+
+### GPU and UFS checked — both have strong, direct hardware evidence
+
+- **GPU (Adreno/KGSL, `adreno.c`)**: `adreno_isidle()` reads the GPU's own
+  ringbuffer read/write pointer *hardware registers* directly (`rptr`/`wptr`,
+  with an `smp_mb()` barrier before comparing) plus a per-GPU-generation
+  `hw_isidle()` register check. `adreno_spin_idle()` polls this with a real
+  timeout, and `adreno_idle()` requires the device mutex held first
+  (guaranteeing no new submissions race the check). This is **direct
+  hardware evidence the AP can verify itself** — no remote-firmware trust
+  needed, unlike the DSP case. The strongest signal found so far.
+- **UFS (`ufshcd.c`)**: `ufshcd_wait_for_doorbell_clr()` reads
+  `REG_UTP_TASK_REQ_DOOR_BELL` / `REG_UTP_TRANSFER_REQ_DOOR_BELL` — real MMIO
+  registers on the UFS host controller, not the software `outstanding_reqs`
+  bitmap — polled with a real timeout, after `ufshcd_hold_all()` blocks new
+  work. Same strength as GPU: direct, self-verifiable, no round-trip trust
+  required.
+
+### Running tally across all subsystems checked
+
+| Subsystem | Verdict | Why |
+| --- | --- | --- |
+| GPU | Strong | Direct ringbuffer rptr/wptr + hw_isidle register read |
+| UFS | Strong | Direct doorbell register read |
+| ADSP/CDSP/SLPI | Good | Synchronous firmware handshake (`sysmon_send_shutdown`), checkable return code |
+| Camera | Weak | Real close() path exists; no independent idle/done check found |
+| SMMU | Blocked | Real debug registers exist; bit encoding undocumented in this tree |
+| USB, SyncBoss, other-DMA, secure/TZ, AOP | Unexamined | 5 of 10 subsystems not yet looked at |
+
+3 of 10 subsystems now have genuinely trustworthy completion evidence to
+build real backends against. This is real, continuing progress — still far
+from a working end-to-end shutdown sequence, and nothing has been run
+against real hardware.
+
+### Remaining five subsystems checked — full survey now complete
+
+- **USB (dwc3, `gadget.c`)**: `dwc3_gadget_run_stop()` writes `DCTL_RUN_STOP`
+  then polls the real `DWC3_DSTS_DEVCTRLHLT` hardware bit with a timeout —
+  same direct-register tier as GPU/UFS. Explicitly stops active transfers
+  first per the hardware databook's documented requirement, not assumed.
+- **SyncBoss (`syncboss_spi_core.c`)**: `stop_streaming_locked()` sends a
+  graceful "go to sleep" MCU command (`shutdown_syncboss_mcu_locked`), then
+  `kthread_stop()` on the worker thread that drives the actual SPI
+  transfers — a real, unconditional blocking kernel join, not a poll with a
+  timeout that can give up early. Good evidence, though queued-but-unsent
+  userspace messages are discarded rather than drained (acceptable for DMA
+  safety, not for data completeness).
+- **Secure/TZ (`qseecom.c`)**: `__qseecom_unload_app()` makes a real
+  synchronous SCM call into TrustZone and can return `-EBUSY` — a genuine
+  "didn't actually finish" signal the caller correctly handles by restoring
+  the refcount and refusing to free memory. Same tier as ADSP: trustworthy,
+  but it's trust in another security world's response, not direct AP-side
+  register evidence.
+- **Video/Venus (likely what "other DMA" covers, `venus_hfi.c`)**:
+  `venus_hfi_core_release()` sets state and unloads firmware under a mutex,
+  but doesn't itself show a synchronous wait for outstanding session
+  completion — that responsibility seems to sit with callers via
+  `session_clean`, not verified in depth here. Weaker and less certain than
+  the ADSP/qseecom pattern; flagged as needing more investigation before
+  trusting it, not ruled out.
+- **AOP/AOSS (`reset-qcom-aoss.c`)**: genuinely weak. `qcom_aoss_control_*`
+  is a plain register write followed by a **fixed `usleep_range(200, 300)`**
+  with a comment trusting Qualcomm's own "6 32kHz sleep cycles" hardware
+  timing spec — no readback, no confirmation, same category as camera's
+  unverified close(). (Bonus found here: AOSS also exposes per-subsystem
+  reset lines for CAMSS/VENUS/GPU/DISPSS/WCSS/LPASS — a second, more blunt
+  reset mechanism separate from the graceful PIL/subsystem_restart path,
+  worth remembering if the graceful path ever needs a fallback.)
+
+### Full ten-subsystem survey (final)
+
+| Subsystem | Verdict | Why |
+| --- | --- | --- |
+| GPU | Strong | Direct ringbuffer rptr/wptr + hw_isidle register read |
+| UFS | Strong | Direct doorbell register read |
+| USB | Strong | Direct DWC3_DSTS_DEVCTRLHLT register read |
+| ADSP/CDSP/SLPI | Good | Synchronous firmware handshake, real return code |
+| SyncBoss | Good | Real kthread_stop() join + graceful MCU command |
+| Secure/TZ | Good | Synchronous SCM call, real -EBUSY error path |
+| Camera | Weak | Close() path exists; no independent idle check |
+| Video/other-DMA | Weak/unclear | No synchronous wait found in core_release itself; needs more digging |
+| AOP/AOSS | Weak | Fixed-delay only, zero hardware confirmation |
+| SMMU | Blocked | Real debug registers exist; bit encoding undocumented |
+
+**Honest summary:** 6 of 10 subsystems now have real, trustworthy
+completion evidence (3 strong direct-register, 3 good synchronous-handshake)
+to build real `qkx_shutdown_backend` implementations against. 3 are weak —
+their existing stop paths are real but give no independent confirmation,
+meaning any backend built on them would be trusting rather than verifying.
+1 (SMMU) is blocked on missing vendor documentation. This is a complete,
+honest first pass across every subsystem the shutdown framework enumerates
+— still zero lines of real backend code written, and nothing has touched
+actual hardware.
+
+### SMMU re-investigated — not actually blocked, wrong layer checked first
+
+The vendor TBU/TCU test-bus registers (`arm-smmu-debug.c`) really are
+undocumented and unusable. But that's the wrong layer to look at. The ARM
+SMMU **architecture itself** (standard, publicly documented — not Qualcomm
+proprietary) defines a real completion mechanism: TLB sync + status
+registers.
+
+`__arm_smmu_tlb_sync()` in `arm-smmu.c` writes to the sync register
+(`ARM_SMMU_CB_TLBSYNC` per-context, or `ARM_SMMU_GR0_sTLBGSYNC` globally),
+then polls the matching status register's `GSACTIVE` bit with a real,
+bounded, exponential-backoff timeout — returning confirmed success or a
+real failure, not a guess. This is the exact same architectural mechanism
+every ARM SMMU driver in mainline Linux uses, already wired into the
+standard `arm_smmu_unmap()` → `io_pgtable_ops` → `tlb_sync` callback chain
+that fires on every ordinary `iommu_unmap()` call. No new SMMU-specific
+code would need writing — this path already exists, is already tested, and
+runs on every normal unmap today.
+
+**The honest caveat, and why SMMU isn't independently solvable:** TLB sync
+confirms the SMMU's translation caches are now clean of whatever was just
+unmapped — it does **not**, by itself, prove no DMA master was using that
+mapping a moment before. A transaction that started just before the unmap
+could still be mid-flight. This means SMMU safety isn't a standalone
+seventh/eighth problem — **it's entirely downstream of correctly stopping
+each master first**, using the per-master signals already surveyed (GPU/
+UFS/USB's direct registers, ADSP/SyncBoss/TZ's handshakes). Get the master
+stop order right, confirmed via those signals, *then* `iommu_unmap()` +
+TLB sync gives real, architectural, already-tested confirmation that the
+SMMU side is clean too.
+
+**Revised verdict: SMMU moves from Blocked to Good** — same tier as the
+synchronous-handshake subsystems, with the explicit dependency noted that
+its correctness rides on the master-stop ordering, not on anything SMMU-
+specific.
+
+### Updated full tally
+
+| Subsystem | Verdict |
+| --- | --- |
+| GPU, UFS, USB | Strong |
+| ADSP/CDSP/SLPI, SyncBoss, Secure/TZ, **SMMU** | Good |
+| Camera, Video/other-DMA, AOP/AOSS | Weak |
+
+7 of 10 subsystems now have real, trustworthy completion evidence — up from
+6. SMMU was never the hardest piece; it was just the wrong register file to
+check first.
+
+### Re-checked the 3 weak subsystems — one real upgrade, one partial, one confirmed weak
+
+- **Video/Venus — upgrades to Good.** Was looking at the wrong function
+  (`core_release`) last pass. `msm_comm_session_abort()` in
+  `msm_vidc_common.c` sends the HFI abort command then does a real
+  `wait_for_completion_timeout()` on `HAL_SESSION_ABORT_DONE` — a genuine
+  firmware round-trip with a bounded timeout, same tier as the ADSP/TZ
+  handshakes. Video moves from "weak/unclear" to **Good**.
+- **AOP — partially upgrades, with an important caveat.** The real AOP
+  message transport (`drivers/mailbox/msm_qmp.c`, distinct from the
+  `reset-qcom-aoss.c` reset-controller checked earlier) is genuinely
+  IRQ-driven: `qmp_send_data()` reads back the message-RAM write to confirm
+  it landed, sets a busy flag preventing overlapping sends, fires a real
+  hardware IRQ, and schedules a real TX timeout — with `wait_for_completion
+  _timeout()` elsewhere in the driver for link/channel-ready handshaking.
+  This is a real, checkable transport, not a blind delay. **But**: this
+  only confirms a message was *delivered and acked* — whether any specific
+  "quiesce your DMA-adjacent activity" message is even defined for AOP, or
+  whether AOP is a meaningful DMA master to begin with (it's a power-
+  sequencing coprocessor, not a bus master like the others), is still an
+  open question. The *reset-controller* path (`reset-qcom-aoss.c`, fixed
+  200-300µs delay, zero confirmation) is a separate, still-weak mechanism
+  that would still be the one actually touching CAMSS/VENUS/GPU/WCSS/LPASS
+  reset lines directly. Net: the messaging transport is trustworthy; what
+  you'd actually use it to confirm, for this specific problem, is unclear.
+  AOP stays flagged as needing real scoping before it can be called solved.
+- **Camera — confirmed weak, even at the hardware-block level.** Checked
+  below the `cam_req_mgr_close()` layer: `cam_ife_csid_halt_csi2()` (the
+  actual CSI2 receiver hardware halt) is pure fire-and-forget register
+  writes — disable IRQ mask, zero two config registers, done. No readback,
+  no status poll, nothing. This is the same shape as AOSS's fixed-delay
+  reset, just without even the delay. Checked the layer most likely to
+  have a GPU/UFS/USB-style direct register confirmation, and it genuinely
+  isn't there. Camera remains the weakest subsystem with no plausible
+  nearby fix found.
+
+### Final tally
+
+| Subsystem | Verdict |
+| --- | --- |
+| GPU, UFS, USB | Strong — direct register read |
+| ADSP/CDSP/SLPI, SyncBoss, Secure/TZ, SMMU, **Video/Venus** | Good — synchronous handshake |
+| **AOP** | Mixed — real transport, unclear what to confirm with it |
+| **Camera** | Weak — confirmed at both layers checked, no completion signal exists |
+
+8 of 10 subsystems now have real, trustworthy completion evidence. AOP needs
+scoping work (what message, if any, actually matters here) rather than more
+register-hunting. Camera is the one subsystem where the honest conclusion is
+that nothing better was found — not because the search was shallow, but
+because the hardware genuinely doesn't expose it at either layer checked.
+
+### Camera re-investigated further — real evidence found, earlier verdict was wrong
+
+Went one layer deeper than CSID (the CSI *receiver*, which only decodes
+incoming camera-sensor data) to VFE/IFE — the block that actually does the
+DMA *writes* to memory, which is what we actually care about for teardown
+safety. This changes the picture completely.
+
+`cam_vfe_reset()` in `cam_vfe_core.c`:
+1. Subscribes to a real hardware IRQ (`cam_vfe_reset_irq_top_half`), with a
+   hardware-version-specific register bitmask for the actual top-reset
+   status bits (`CAM_VFE_48X_TOP_RESET_MASK` etc — real silicon, not
+   software bookkeeping).
+2. Triggers the hardware reset via `vfe_top->hw_ops.reset(...)`.
+3. Blocks on `wait_for_completion_timeout(&vfe_hw->hw_complete, 500)` —
+   genuinely waiting for the hardware interrupt to fire and call
+   `complete()`, with a real, distinguishable timeout path
+   ("Reset Timeout" logged, not silently assumed success).
+
+And this isn't buried in an error-only path: `cam_ife_mgr_reset()` (which
+resets both CSID and VFE for a context, calling this exact function) is
+formally registered as `hw_mgr_intf->hw_reset` — a standard, intentional
+operation in the ISP hardware manager's own interface, not something only
+reachable during overflow/error recovery.
+
+**This means camera's DMA-relevant hardware (VFE) has the same tier of
+evidence as GPU/UFS/USB — a real, interrupt-backed, timeout-bounded
+hardware confirmation, reachable through a normal, exposed API.** My
+earlier "confirmed weak" verdict was wrong — I'd checked the request-
+manager's software refcount (`cam_req_mgr_close`) and the CSID receiver's
+halt (fire-and-forget, correctly weak), but missed VFE, which is the block
+that actually matters for DMA safety and turns out to be solid.
+
+**Revised verdict: Camera moves from Weak to Strong.**
+
+### Updated final tally
+
+| Subsystem | Verdict |
+| --- | --- |
+| GPU, UFS, USB, **Camera (VFE)** | Strong — direct register/IRQ-backed hardware confirmation |
+| ADSP/CDSP/SLPI, SyncBoss, Secure/TZ, SMMU, Video | Good — synchronous handshake |
+| AOP | Mixed — real transport, unclear what message matters |
+
+9 of 10 subsystems now have real, trustworthy completion evidence. Only AOP
+remains genuinely unresolved, and that's a scoping question (what, if
+anything, needs confirming from it) rather than a missing-register problem.
