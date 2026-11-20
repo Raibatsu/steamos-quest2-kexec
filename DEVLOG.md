@@ -1350,3 +1350,74 @@ clock-gate-first check across every backend this session built) matches
 the standard the person who wrote the gate itself was already applying
 to their own code, not a self-imposed extra layer of caution beyond
 what the project calls for.
+
+## AOP/TCS mitigation design: a real, partial path found via already-exported rpmh_flush()
+
+First real attempt at designing a mitigation (not just documenting the
+gap) for the stale-TCS-slot race that started this whole research
+effort: rpmh-rsc.c's probe() blindly zeroes drv->tcs_in_use with no
+hardware verification, safe only on a true cold boot.
+
+Deliberately did not read RSC_DRV_CMD_ENABLE/RSC_DRV_STATUS directly
+from this module - backend_aop.c already documented why: AOP is
+"always-on, security- and power-sequencing-critical infrastructure
+where a third wrong guess is least acceptable to risk," after two real
+crashes this session from the same category of mistake elsewhere.
+Looked instead for an existing, driver-sanctioned, already-exported
+mechanism.
+
+Traced rpmh_flush() (rpmh.c:552, EXPORT_SYMBOL, already called once in
+loader.c for one specific regulator client) end to end:
+
+- It calls rpmh_rsc_invalidate(drv) first, retrying on -EAGAIN.
+- rpmh_rsc_invalidate() calls tcs_invalidate() for SLEEP_TCS and
+  WAKE_TCS only (rpmh-rsc.c:154) - explicitly, deliberately not
+  ACTIVE_TCS.
+- tcs_invalidate() (rpmh-rsc.c:123) is itself hardware-state-aware, not
+  blind: for each bank of that type, it calls tcs_is_free(drv, m) -
+  literally !test_bit(m, drv->tcs_in_use), confirming tcs_in_use (the
+  exact field backend_aop.c already reads informationally) is the real
+  authoritative per-bank record. If any bank isn't free it returns
+  -EAGAIN (a safe refusal, never a forced override) rather than
+  proceeding. Only once every bank of that type is confirmed free does
+  it write real hardware registers (RSC_DRV_CMD_ENABLE=0,
+  RSC_DRV_CMD_WAIT_FOR_CMPL=0) via the driver's own
+  write_tcs_reg_sync(), then zero the software tcs->slots bitmap to
+  match.
+- flush_batch() (rpmh.c:355), rpmh_flush()'s other half, is explicitly
+  scoped the same way ("Send Sleep/Wake requests to the controller" -
+  its own comment) via rpmh_rsc_write_ctrl_data(), never an active-state
+  send.
+
+get_rpmh_ctrlr(dev) (rpmh.c:72) resolves dev->parent's drvdata to find
+the rsc_drv - meaning rpmh_flush() needs a CHILD/consumer device of the
+RSC in question, not the RSC's own platform device. loader.c's existing
+call uses one specific regulator client under "18200000.rsc"
+(APPS_RSC); the same pattern would need a real child device under
+"af20000.rsc" (DISP_RSC) too for full coverage.
+
+### What this is, and what it honestly is not
+
+This is a real, concrete, safe path - calling rpmh_flush() for both
+RSCs right before a jump would genuinely invalidate SLEEP_TCS/WAKE_TCS
+banks using the driver's own hardware-aware, never-forcing logic,
+narrowing the stale-slot concern for those two TCS types from
+"completely unaddressed" to "addressable via an already-exported,
+already-used-once mechanism."
+
+It does not touch ACTIVE_TCS at all - confirmed, not assumed, by
+reading every function rpmh_flush() calls. The one function that even
+checks active-TCS idle state, rpmh_rsc_ctrlr_is_idle() (rpmh-rsc.c:593),
+is not EXPORT_SYMBOL'd - rpmh-rsc.c has zero exported symbols of its
+own; rpmh_rsc_invalidate() and rpmh_rsc_ctrlr_is_idle() are only
+reachable because rpmh-rsc.o and rpmh.o are compiled into the same
+module (qcom_rpmh.ko, drivers/soc/qcom/Makefile:14-16) - genuinely
+unreachable from an external module like this one without the kernel
+itself exporting a new symbol. There is no safe way found yet to even
+verify, let alone clear, active-TCS state from outside the driver.
+
+This is real forward progress on the single most important open
+question from this session, not a complete answer: the gap is now
+precisely bounded (sleep/wake addressable, active genuinely not) rather
+than uniformly unknown. Nothing in this entry was executed on real
+hardware - this is design/source research only.
