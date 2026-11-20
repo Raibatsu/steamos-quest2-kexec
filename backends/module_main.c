@@ -253,6 +253,90 @@ static void qkx_rollback_contract_test(void)
 	pr_info("qkx_backends: [rollback-contract] %u/%u checks passed\n", pass, total);
 }
 
+/* Mirrors qkx_check_rollback() for the forward direction. The self-test
+ * above only ever exercises CLOSE; forward evidence is 1U << action (it
+ * varies per action too, same as rollback did), so this independently
+ * verifies DRAIN/STOP/RETIRE are handled correctly as well, not just the
+ * one action self-test happens to try. Covers both real outcomes
+ * honestly: a COMPLETE receipt must carry evidence == 1U << action and
+ * quiesced_attempt == 0 (original_attempt for FORWARD is always 0,
+ * confirmed in shutdown.c's own key construction); a PENDING receipt
+ * must carry evidence == 0 and quiesced_attempt == 0 (confirmed against
+ * qkx_shutdown_receipt()'s own PENDING branch) - this is a real,
+ * current state check against whatever this backend genuinely reports
+ * right now, not a fixed expected outcome.
+ */
+static bool qkx_check_forward(const struct qkx_shutdown_backend *backend,
+			       const char *name, enum qkx_shutdown_action action)
+{
+	struct qkx_shutdown_key key = { 0 };
+	struct qkx_shutdown_receipt receipt = { 0 };
+	int ret;
+
+	key.client = 0xCAFEUL;
+	key.epoch = qkx_epoch;
+	key.transaction = 1;
+	key.attempt = 5; /* deliberately not 0/1, to catch a hardcoded wrong value */
+	key.subsystem = backend->subsystem;
+	key.action = action;
+	key.direction = QKX_SHUTDOWN_FORWARD;
+	key.original_attempt = 0;
+
+	ret = backend->begin(backend->context, &key, &receipt);
+	if (ret) {
+		pr_info("qkx_backends: [%s] forward(action=%u) call failed: %d\n", name, action, ret);
+		return false;
+	}
+
+	if (receipt.state == QKX_SHUTDOWN_COMPLETE) {
+		if (receipt.evidence != (1U << action) || receipt.quiesced_attempt != 0) {
+			pr_info("qkx_backends: [%s] forward(action=%u) COMPLETE MISMATCH evidence=0x%x(want 0x%x) attempt=%llu(want 0)\n",
+				name, action, receipt.evidence, 1U << action, receipt.quiesced_attempt);
+			return false;
+		}
+	} else if (receipt.state == QKX_SHUTDOWN_PENDING) {
+		if (receipt.evidence != 0 || receipt.quiesced_attempt != 0) {
+			pr_info("qkx_backends: [%s] forward(action=%u) PENDING MISMATCH evidence=0x%x(want 0) attempt=%llu(want 0)\n",
+				name, action, receipt.evidence, receipt.quiesced_attempt);
+			return false;
+		}
+	} else {
+		pr_info("qkx_backends: [%s] forward(action=%u) unknown state=%d\n", name, action, receipt.state);
+		return false;
+	}
+	return true;
+}
+
+static void qkx_forward_contract_test(void)
+{
+	static const enum qkx_shutdown_action producer_actions[] = {
+		QKX_SHUTDOWN_CLOSE, QKX_SHUTDOWN_DRAIN, QKX_SHUTDOWN_STOP,
+	};
+	int i, j;
+	unsigned int pass = 0, total = 0;
+
+	for (i = 0; i < QKX_SHUTDOWN_SUBSYSTEMS; i++) {
+		const struct qkx_shutdown_backend *b = &qkx_backends[i];
+		bool is_producer = (i <= QKX_SHUTDOWN_OTHER_DMA);
+		enum qkx_shutdown_action solo_action =
+			(i == QKX_SHUTDOWN_AOP) ? QKX_SHUTDOWN_RETIRE : QKX_SHUTDOWN_RELEASE;
+
+		if (!b->begin)
+			continue;
+
+		if (is_producer) {
+			for (j = 0; j < ARRAY_SIZE(producer_actions); j++) {
+				total++;
+				pass += qkx_check_forward(b, qkx_subsys_names[i], producer_actions[j]);
+			}
+		} else {
+			total++;
+			pass += qkx_check_forward(b, qkx_subsys_names[i], solo_action);
+		}
+	}
+	pr_info("qkx_backends: [forward-contract] %u/%u checks passed\n", pass, total);
+}
+
 static int __init qkx_backends_init(void)
 {
 	int i;
@@ -283,6 +367,7 @@ static int __init qkx_backends_init(void)
 	qkx_self_test();
 	qkx_orchestration_test();
 	qkx_rollback_contract_test();
+	qkx_forward_contract_test();
 	return 0;
 }
 
