@@ -11,6 +11,7 @@ target-build.log
 # Contains the real device's serial number embedded in bootargs
 live-fdt.dtb
 live-fdt-src/
+private-captures/
 
 # Backend module build artifacts
 backends/*.o

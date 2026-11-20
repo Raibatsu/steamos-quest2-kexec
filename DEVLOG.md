@@ -1906,3 +1906,31 @@ headset execution:
    Boot Device), verify usable Horizon Home + head/controller tracking, re-root,
    and run the after-capture + `--compare-before/--compare-after`.
 3. Verify `console-ramoops-0` survival across a reset/watchdog bite.
+
+## Stage 3 Physical Recovery Rehearsal (Live Quest 2, 2026-11-21)
+
+- **Before capture**: `hollywood` / `52242990024200150` /
+  `4.19.325-cip128-st12-g49638c7a8637`, boot ID
+  `51d1c5d7-ef6f-4e73-a1a0-4a7aed30e2b1`. `/sys/fs/pstore` held 4 intact
+  records from prior warm-reset/panic (`console-ramoops-0` 131,060 B with
+  complete tail through `SMP: stopping secondary CPUs` + `npu_panic_handler`,
+  `dmesg-ramoops-0`, `dmesg-ramoops-1`, `pmsg-ramoops-0`).
+- **Physical rehearsal**: Unplugged USB, held **Power + Volume Down** for
+  **18–19 s** (stopwatch-timed) until boot menu appeared, selected **Boot
+  Device**, confirmed healthy Horizon Home + normal head/left/right
+  controller tracking, re-rooted unplugged, reconnected USB.
+- **After capture**: Same identity, new boot ID
+  `019005f2-d844-4774-8e0f-75e141d219b6`, PMIC PON `PS_HOLD` / `Hard Reset`.
+  `/sys/fs/pstore` was **empty** after the hard button reset / boot-menu cycle.
+- **Key operational finding**:
+  - **Warm reset (panic / 15 s AP watchdog bite)** preserves `console-ramoops-0`
+    (proven by the before-capture's full panic log).
+  - **Hard button reset (18–19 s Power + Vol-Down)** reliably recovers Horizon
+    OS + tracking from any wedged state, but drops DRAM/pstore retention.
+  - Therefore, in Stage 4 experiments: let the 15 s AP watchdog bite perform a
+    warm reset first whenever diagnostics are needed; use the 18–19 s
+    Power+Vol-Down hold as the independent physical backstop.
+- **Stage 2 live owner bonus**: Confirmed `/odm/bin/hw/vendor.oculus.hardware.sensors@1.0-service`
+  owns all `/dev/syncboss*`, `/dev/video0..1`, and `/dev/v4l-subdev0..12`, while
+  `/odm/bin/trackingservice`, `adsprpcd`, and `cdsprpcd` own
+  `/dev/adsprpc-smd-secure`.
