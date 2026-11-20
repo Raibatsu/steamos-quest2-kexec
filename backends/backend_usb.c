@@ -2,30 +2,36 @@
  *
  * USB (dwc3) shutdown-safety backend.
  *
- * REVISED twice. First: after a sibling backend (UFS) crashed real
- * hardware despite its owning device reporting genuinely runtime-PM
- * active - caused by a link-level autonomous low-power state entirely
- * outside Linux's generic PM model - this backend stopped reading
- * DWC3_DSTS or any other raw register, since dwc3/core.c exposes no
- * safe software-backed attribute either (checked directly).
+ * REVISED three times. First: after a sibling backend (UFS) crashed
+ * real hardware despite its owning device reporting genuinely
+ * runtime-PM active - caused by a link-level autonomous low-power state
+ * entirely outside Linux's generic PM model - this backend stopped
+ * reading DWC3_DSTS or any other raw register, since dwc3/core.c
+ * exposes no safe software-backed attribute either (checked directly).
  *
- * Second (this revision): found a different, safer signal. The generic
- * Linux USB gadget core (drivers/usb/gadget/udc/core.c) exposes
- * /sys/class/udc/<name>/state (confirmed real on this device at
- * /sys/class/udc/a600000.dwc3/state) - its state_show() handler does
- * nothing but sprintf() the cached gadget->state enum, no register
- * access, not even a lock needed for the read. This is exactly the kind
- * of link-level, autonomous state the clock-gate check could not see
- * (the same category of gap that crashed UFS): USB_STATE_SUSPENDED or
- * USB_STATE_NOTATTACHED here mean the link itself is confirmed not
- * active, independent of whatever Linux's generic PM thinks. Other
- * states (e.g. "configured", the normal state while actively connected)
- * do not confirm an in-flight transfer either way, so they fall through
- * to the same honest PENDING answer as before - this backend does not
- * claim more certainty than the signal actually gives.
+ * Second: found the generic Linux USB gadget core's
+ * /sys/class/udc/<name>/state (sprintf()'d from a cached enum, no
+ * register access), kept below as a fallback.
+ *
+ * Third (this revision): dwc3/core.c's probe() calls
+ * platform_set_drvdata(pdev, dwc) on a DIFFERENT device than the
+ * QKX_DEV_USB0 wrapper this backend's clock-gate check uses - confirmed
+ * the real name is "a600000.dwc3" (the inner dwc3 core child node, not
+ * "a600000.ssusb" the wrapper) via this device's own
+ * /sys/bus/platform/devices/ listing. struct dwc3's in_lpm field is an
+ * atomic_t - exactly what dwc3_link_state_show() (its own debugfs
+ * handler) checks first, before ever reading DWC3_DSTS: "if
+ * (atomic_read(&dwc->in_lpm)) report powered off, skip the register."
+ * Reading the same flag here gives the identical safety signal the real
+ * driver uses, without debugfs (confirmed unavailable on this device)
+ * and without the register read itself. atomic_t needs no additional
+ * lock to read safely. Offset resolved from this device's own
+ * /sys/kernel/btf/vmlinux.
  */
 #include <linux/errno.h>
 #include <linux/string.h>
+#include <linux/uaccess.h>
+#include <linux/platform_device.h>
 #include "qkx_common.h"
 #include "qkx_ctx.h"
 
@@ -34,6 +40,34 @@
 		      QKX_SHUTDOWN_CAP(QKX_SHUTDOWN_STOP))
 
 #define QKX_UDC_STATE_PATH "/sys/class/udc/a600000.dwc3/state"
+#define QKX_DWC3_DEV "a600000.dwc3"
+#define QKX_DWC3_IN_LPM_OFF 2304
+
+static bool qkx_usb_in_lpm(void)
+{
+	struct device *dev;
+	void *dwc;
+	s32 in_lpm = 0;
+
+	dev = bus_find_device_by_name(&platform_bus_type, NULL, QKX_DWC3_DEV);
+	if (!dev)
+		return false;
+
+	dwc = dev_get_drvdata(dev);
+	if (!dwc) {
+		put_device(dev);
+		return false;
+	}
+
+	if (probe_kernel_read(&in_lpm, (char *)dwc + QKX_DWC3_IN_LPM_OFF, sizeof(in_lpm))) {
+		put_device(dev);
+		return false;
+	}
+	put_device(dev);
+
+	pr_info("qkx_backends: [usb] dwc3 in_lpm=%d\n", in_lpm);
+	return in_lpm != 0;
+}
 
 static bool qkx_usb_halted(void)
 {
@@ -42,6 +76,9 @@ static bool qkx_usb_halted(void)
 	ssize_t n;
 
 	if (clk == QKX_CLOCK_GATED)
+		return true;
+
+	if (qkx_usb_in_lpm())
 		return true;
 
 	n = qkx_read_sysfs_file(QKX_UDC_STATE_PATH, buf, sizeof(buf));
