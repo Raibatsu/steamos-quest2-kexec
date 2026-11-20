@@ -7,6 +7,8 @@
 #include <linux/device.h>
 #include <linux/pm_runtime.h>
 #include <linux/platform_device.h>
+#include <linux/fs.h>
+#include <linux/file.h>
 #include "shutdown.h"
 
 /*
@@ -76,6 +78,32 @@ static inline u32 qkx_read_phys(phys_addr_t pa, u32 size, u32 byte_off)
 static inline u32 qkx_read_phys_word(phys_addr_t pa, u32 size, u32 word_off)
 {
 	return qkx_read_phys(pa, size, word_off * 4);
+}
+
+/* Reads a sysfs file exactly as a userspace tool would (open, read,
+ * close) - zero MMIO, zero register access of any kind. Used for files
+ * like /sys/class/kgsl/kgsl-3d0/gpubusy, which the real driver backs with
+ * pure software counters (device->pwrctrl.clk_stats), not a live register
+ * read - confirmed by reading kgsl_pwrctrl.c's own gpubusy_show() this
+ * session. Returns the number of bytes read, or a negative errno.
+ */
+static inline ssize_t qkx_read_sysfs_file(const char *path, char *buf, size_t buflen)
+{
+	struct file *f;
+	ssize_t ret;
+	loff_t pos = 0;
+
+	f = filp_open(path, O_RDONLY, 0);
+	if (IS_ERR(f))
+		return PTR_ERR(f);
+
+	ret = kernel_read(f, buf, buflen - 1, &pos);
+	filp_close(f, NULL);
+
+	if (ret >= 0 && ret < (ssize_t)buflen)
+		buf[ret] = '\0';
+
+	return ret;
 }
 
 enum qkx_clock_state {
