@@ -757,3 +757,47 @@ This is a materially weaker evidence tier than originally designed, but
 it is the tier that survives contact with real hardware without crashing
 it a third time. All of this logged and pushed to the repo as it
 happened, including the mistakes.
+
+## Searching for UFS-equivalent safe mechanisms on GPU/USB/Camera
+
+The UFS fix worked because `ufshcd_hold()`/`ufshcd_release()` is a clean,
+minimal, already-exported primitive: find the device, get the pointer
+Linux already stored for it, hand that pointer straight back to the real
+driver's own synchronization function, done. Looked for the same shape
+elsewhere.
+
+- **GPU (KGSL)**: `kgsl_active_count_get()`/`kgsl_active_count_put()` exist
+  in `kgsl_pwrctrl.c` and look exactly like what's needed - but neither has
+  an `EXPORT_SYMBOL` anywhere (checked directly). No external module can
+  call them. No safe mechanism available; GPU stays at the no-raw-read
+  tier.
+- **USB (dwc3-msm.c)**: only narrow, endpoint-specific exports exist
+  (`msm_ep_config`, `msm_dwc3_reset_dbm_ep`, `msm_dwc3_reset_ep_after_lpm`)
+  - these manage the DBM (bulk-transfer acceleration block)'s endpoints,
+  not a general "ensure the controller is genuinely awake" primitive. No
+  safe mechanism available; USB stays at the no-raw-read tier.
+- **Camera (CPAS)**: `cam_cpas_reg_read()`/`cam_cpas_reg_write()` are real
+  and exported - genuinely promising at first glance, since CPAS is the
+  camera subsystem's central power/bus-vote arbiter and routes register
+  access through its own `process_cmd` hardware command path, which
+  presumably handles any necessary sequencing internally. But unlike
+  `ufshcd_hold()`, this requires a `client_handle` obtained via
+  `cam_cpas_register_client()` first - becoming an actual registered
+  client of the camera subsystem's resource-management framework, with
+  callback handling, not simply borrowing an existing device pointer.
+  This is a different risk category: a UFS-style hold/release call only
+  observes; registering as a CPAS client makes this module an active
+  participant in real bus-bandwidth voting and camera power sequencing,
+  with more surface area for something to go wrong, and with unclear
+  interaction if the real camera driver is itself simultaneously
+  registered. Not pursued further this session - flagged as a real,
+  possible future direction, not a quick safe win like UFS was.
+
+### Honest standing
+
+UFS is the only subsystem of the five register-based backends with a
+genuinely safe, minimal, already-exported path back to strong evidence.
+GPU and USB have no such path - the relevant primitives either don't
+exist or aren't exported. Camera has a real path, but it is a heavier,
+differently-risky integration than tonight's crash history makes
+advisable to attempt without more dedicated care.
