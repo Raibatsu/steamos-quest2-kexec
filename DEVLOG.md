@@ -1110,3 +1110,79 @@ confirmation that the core problem (completion isn't provable from the
 API) is correctly understood, not assumed. Still have not attempted a
 real teardown - this was research to know what attempting one correctly
 would require, not an attempt itself.
+
+## Checking qkx_dma_gate()'s own claim against real source, subsystem by subsystem
+
+Re-read qkx_dma_gate() itself (module/loader.c:1014) directly rather than
+from memory. It is a simple, unconditional, hard refusal for any
+"Hollywood"-model device:
+
+    pr_err("quest_kexec: Hollywood DMA shutdown/completion is
+    unvalidated; refusing hardware transition\n");
+    return -EOPNOTSUPP;
+
+with an explicit comment: "No experimental flag bypasses this." This
+gate does not consult qkx_backends.ko at all right now - the two are
+currently separate. Bypassing or modifying this gate is a materially
+bigger, more consequential decision than anything attempted this
+session (everything so far has been read-only checks or symmetric
+subsystem_get/put - never the real jump path), and was not attempted.
+
+The comment's specific factual claim - "Generic shutdown does not run
+their remove paths" - is checkable from source without touching
+hardware, so checked it directly rather than taking it on faith:
+
+1. Confirmed qkx_execute() (loader.c:1227) really does call
+   prepare(NULL), i.e. kernel_restart_prepare(NULL), during a real jump
+   - not just looked up and unused.
+2. kernel_restart_prepare() (kernel/reboot.c:69) unconditionally calls
+   device_shutdown() (drivers/base/core.c:3599), which walks every
+   struct device and calls dev->bus->shutdown(dev) or
+   dev->driver->shutdown(dev) if either is registered.
+3. Checked every subsystem this session built a real backend for, for
+   whether their actual platform/spi_driver registers a .shutdown field
+   at all:
+
+   | Subsystem | Driver file | .shutdown registered? |
+   | --- | --- | --- |
+   | Camera (cam_req_mgr) | cam_req_mgr_dev.c | No |
+   | AOP/RPMh | rpmh-rsc.c | No |
+   | SMMU | arm-smmu.c | No |
+   | Video (Venus) | msm_v4l2_vidc.c | No |
+   | SyncBoss | (spi driver) | No |
+   | GPU (KGSL) | drivers/gpu/msm/*.c | No |
+   | USB (dwc3) | drivers/usb/dwc3/*.c | No |
+   | UFS | ufs-qcom.c | Yes - ufshcd_pltfrm_shutdown |
+
+   ADSP/DSP (subsystem_restart-managed) is a separate case: its real
+   teardown (subsys_stop()/PIL .shutdown) is driven entirely by
+   subsystem_restart.c's own refcounting, never by generic
+   device_shutdown() - a struct subsys_device is not torn down by this
+   path at all.
+
+4. UFS's real .shutdown (ufshcd_shutdown(), ufshcd.c:10865) does
+   substantial, real work: blocks further SCSI requests
+   (ufshcd_scsi_block_requests()) and waits for the doorbell to clear
+   (ufshcd_wait_for_doorbell_clr()) - the exact same doorbell registers
+   backend_ufs.c already independently checks. UFS is the one subsystem
+   this session built a backend for that is already covered by a real,
+   substantial generic kernel mechanism during a genuine kexec jump,
+   independent of anything this module does.
+
+### What this adds to confidence toward the gate
+
+This is the first time this session has checked the gate's own stated
+reasoning against source, rather than taking its comment as given. The
+result is a precise, concrete confirmation, not a surprise: of the 8
+non-DSP subsystems this session built real backends for, only UFS has
+any generic kernel-provided shutdown coverage at all. Camera, AOP, SMMU,
+Video, SyncBoss, GPU and USB would get nothing from the kernel's own
+device_shutdown() during a real jump - confirming, with source-level
+precision rather than general suspicion, exactly why the gate's
+"unvalidated" claim is accurate for this device and why everything this
+session built (and the things still missing - a safe way to drive
+DSP/ADSP's real subsys_stop(), and the same for every other
+subsystem_restart entity) would need to genuinely substitute for that
+missing coverage before this gate's refusal could be responsibly
+reconsidered. Still have not touched the gate itself, and no changes to
+loader.c were made.
