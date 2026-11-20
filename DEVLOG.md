@@ -1421,3 +1421,44 @@ question from this session, not a complete answer: the gap is now
 precisely bounded (sleep/wake addressable, active genuinely not) rather
 than uniformly unknown. Nothing in this entry was executed on real
 hardware - this is design/source research only.
+
+## Precisely bounding the active-TCS gap: it's specific to APPS_RSC, not both RSCs
+
+Checked whether the active-TCS gap (identified in the previous entry -
+rpmh_flush() never touches ACTIVE_TCS, and the only idle-check function
+for it isn't exported) is even real on this specific hardware. The
+driver's own comment notes some RSCs have no dedicated ACTIVE_TCS bank
+at all, in which case active votes are redirected to WAKE_TCS instead
+(rpmh-rsc.c:185-193) - which rpmh_flush() does cover. Whether that
+applies here is a config fact, not something to guess at - read it
+directly from the live device's own device tree
+(/proc/device-tree/soc/rsc@18200000/qcom,tcs-config and
+.../rsc@af20000/qcom,tcs-config), pure read-only, zero hardware risk -
+not a live register, just exposing already-static DT configuration data.
+
+Parsed the raw (type, num_tcs) pairs using the real constants from
+include/dt-bindings/soc/qcom,rpmh-rsc.h (SLEEP_TCS=0, WAKE_TCS=1,
+ACTIVE_TCS=2, CONTROL_TCS=3):
+
+| RSC | SLEEP_TCS | WAKE_TCS | ACTIVE_TCS | CONTROL_TCS |
+| --- | --- | --- | --- | --- |
+| APPS_RSC (18200000.rsc) | 3 | 3 | 2 | 1 |
+| DISP_RSC (af20000.rsc) | 1 | 1 | 0 | 0 |
+
+DISP_RSC has zero dedicated ACTIVE_TCS banks - its active votes are
+redirected to WAKE_TCS per the driver's own repurposing logic, which
+rpmh_flush()'s WAKE_TCS invalidation already covers. The active-TCS gap
+does not exist at all for DISP_RSC.
+
+APPS_RSC genuinely has 2 dedicated ACTIVE_TCS banks - the gap is real
+and specific to this RSC only.
+
+### What this adds
+
+Narrows the single remaining open piece of the AOP/TCS problem from "an
+unbounded ACTIVE_TCS concern across AOP" to a precisely scoped one:
+specifically APPS_RSC's 2 active-TCS banks, with DISP_RSC's side of the
+problem already fully addressable by the rpmh_flush()-based mitigation
+designed in the previous entry. This is real narrowing of scope via a
+simple, safe, zero-risk device-tree read - not a new mitigation for the
+remaining gap, but a precise statement of exactly how small it now is.
