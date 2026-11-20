@@ -2,28 +2,33 @@
  *
  * GPU (Adreno/KGSL) shutdown-safety backend.
  *
- * REVISED twice. First: after two real crashes on real hardware this
- * session (camera's VFE register, then UFS's doorbell register, both
- * raising a fatal asynchronous SError), this backend stopped reading any
- * raw register at all - kgsl_active_count_get()/put() exist and look
- * like the right primitive, but neither is EXPORT_SYMBOL'd (checked
- * directly), so there is no UFS-style safe hold/release path available.
+ * REVISED three times. First: after two real crashes on real hardware
+ * this session (camera's VFE register, then UFS's doorbell register,
+ * both raising a fatal asynchronous SError), this backend stopped
+ * reading any raw register at all - kgsl_active_count_get()/put() exist
+ * and look like the right primitive, but neither is EXPORT_SYMBOL'd
+ * (checked directly), so there is no UFS-style safe hold/release path.
  *
- * Second (this revision): restored a real signal anyway, via a different
- * route. kgsl_pwrctrl.c's own `gpubusy` sysfs attribute
- * (DEVICE_ATTR_RO(gpubusy), confirmed real on this device at
- * /sys/class/kgsl/kgsl-3d0/gpubusy) is backed entirely by software
- * counters (device->pwrctrl.clk_stats) - its show() handler performs no
- * MMIO access at all, confirmed by reading gpubusy_show() directly. This
- * backend reads that file exactly as a userspace tool would (open, read,
- * close - qkx_read_sysfs_file()), never touching a register. The file's
- * own busy_old counter resets to 0 whenever the driver's AXI-on flag is
- * clear, so busy_old == 0 is a reasonably confident idle signal; a
- * nonzero value does not necessarily mean busy right now (the counter
- * accumulates since the last read by anyone), so this is reported
- * honestly as a sampled, not instantaneous, signal.
+ * Second: restored a real signal via kgsl_pwrctrl.c's `gpubusy` sysfs
+ * attribute (software counters, device->pwrctrl.clk_stats, confirmed no
+ * MMIO access in gpubusy_show()) - a sampled, reset-on-read signal, kept
+ * below as a fallback.
+ *
+ * Third (this revision): kgsl.c's probe() calls
+ * dev_set_drvdata(&device->pdev->dev, device) (confirmed directly), so
+ * struct kgsl_device is reachable the same safe way as UFS/SyncBoss/
+ * Video: dev_get_drvdata(), no offset trick. device->state is KGSL's own
+ * real power state machine (KGSL_STATE_SLUMBER=0x80 is fully powered
+ * down - stronger and more specific than gpubusy's sampled counter),
+ * read under device->mutex (mutex_trylock - busy means inconclusive,
+ * never blocks; this is KGSL's main device-wide lock, so busy is not
+ * unusual and simply falls through to gpubusy below, not treated as a
+ * failure). Offsets resolved from this device's own
+ * /sys/kernel/btf/vmlinux.
  */
 #include <linux/errno.h>
+#include <linux/uaccess.h>
+#include <linux/mutex.h>
 #include "qkx_common.h"
 #include "qkx_ctx.h"
 
@@ -32,6 +37,46 @@
 		      QKX_SHUTDOWN_CAP(QKX_SHUTDOWN_STOP))
 
 #define QKX_GPUBUSY_PATH "/sys/class/kgsl/kgsl-3d0/gpubusy"
+#define QKX_KGSL_MUTEX_OFF	2304
+#define QKX_KGSL_STATE_OFF	2336
+#define QKX_KGSL_STATE_SLUMBER	0x00000080
+
+static bool qkx_gpu_kgsl_slumber(void)
+{
+	struct device *dev;
+	void *device;
+	struct mutex *mutex;
+	u32 state = 0;
+	bool slumber = false;
+
+	dev = bus_find_device_by_name(&platform_bus_type, NULL, QKX_DEV_GPU);
+	if (!dev)
+		return false;
+
+	device = dev_get_drvdata(dev);
+	if (!device) {
+		put_device(dev);
+		return false;
+	}
+
+	mutex = (struct mutex *)((char *)device + QKX_KGSL_MUTEX_OFF);
+	if (!mutex_trylock(mutex)) {
+		put_device(dev);
+		return false; /* busy: inconclusive, falls through to gpubusy */
+	}
+
+	if (probe_kernel_read(&state, (char *)device + QKX_KGSL_STATE_OFF, sizeof(state))) {
+		mutex_unlock(mutex);
+		put_device(dev);
+		return false;
+	}
+	mutex_unlock(mutex);
+	put_device(dev);
+
+	slumber = (state == QKX_KGSL_STATE_SLUMBER);
+	pr_info("qkx_backends: [gpu] kgsl_state=0x%x slumber=%d\n", state, slumber);
+	return slumber;
+}
 
 static bool qkx_gpu_is_idle(void)
 {
@@ -41,6 +86,9 @@ static bool qkx_gpu_is_idle(void)
 	unsigned long busy_old = 0, total_old = 0;
 
 	if (clk == QKX_CLOCK_GATED)
+		return true;
+
+	if (qkx_gpu_kgsl_slumber())
 		return true;
 
 	n = qkx_read_sysfs_file(QKX_GPUBUSY_PATH, buf, sizeof(buf));
