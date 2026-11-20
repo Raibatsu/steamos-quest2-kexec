@@ -1633,3 +1633,219 @@ needing any new verification primitive invented from scratch.
 Not a fundamental unknown - a precisely identified, concretely fixable
 wiring gap. The hardware-level proof already exists in shipped code; it
 is one unchecked return value away from being as solid as GPU's chain.
+
+---
+
+# Stage 2 Complete Hardware-Shutdown Audit (All 10 Owner Classes)
+
+Completed the full source-verified audit of all 10 Stage 2 owner classes
+defined in `docs/QUEST2_CHECKED_SHUTDOWN.md` against the pinned Quest 2
+stock kernel (`kernel-src`), `device.config`, `preflight-capture/iomem.txt`,
+and `Quest-2-Steam-OS-Dual-Boot/module/loader.c`.
+
+## 1. USB (`a600000.dwc3` / `a600000.ssusb`) — Closed
+
+In addition to commit `670daba` (`dwc3_gadget_suspend()` discarding
+`dwc3_gadget_run_stop()`'s `-ETIMEDOUT` return value):
+
+- **No `.shutdown` callback**: Neither `dwc3` nor `dwc3-msm` defines a
+  `.shutdown` hook; `device_shutdown()` does nothing to USB.
+- **Missing lock + IRQ sync bug in `loader.c:1191`**: `dwc3_suspend_common()`
+  (`drivers/usb/dwc3/core.c:1711-1714`) wraps `dwc3_gadget_suspend()` in
+  `spin_lock_irqsave(&dwc->lock, flags)` and follows with
+  `synchronize_irq(dwc->irq_gadget)`. `loader.c:1191` calls
+  `dwc3_gadget_suspend(dwc)` without holding `dwc->lock` and without
+  `synchronize_irq()`.
+- **Independent safe MMIO verification**: `dwc3_msm_runtime_resume()`
+  (`drivers/usb/dwc3/dwc3-msm.c:4946`) -> `dwc3_msm_resume()`
+  (`dwc3-msm.c:2749-2921`) acquires `mdwc->suspend_resume_mutex`, exits
+  power collapse/clocks, and sets `atomic_set(&dwc->in_lpm, 0)` (line
+  2877). Thus `pm_runtime_get_sync()` on `a600000.ssusb` is the safe
+  `ufshcd_hold()`-equivalent primitive for reading `DWC3_DSTS` (`0xc70c`,
+  bit 22 `DEVCTRLHLT`), while `in_lpm == 1` already proves controller
+  clocks/GDSC are off.
+- **GSI/DBM/IPA**: `CONFIG_IPA` is not set in `device.config` and no
+  `gsi`/`dbm`/`ipa` nodes exist in `live-fdt-src`; GSI/DBM USB DMA is not
+  active on Quest 2 Hollywood.
+
+## 2. UFS (`1d84000.ufshc`) — Closed
+
+- `ufshcd_shutdown()` (`drivers/scsi/ufs/ufshcd.c:10865-10900`) runs via
+  `device_shutdown()`, sets `shutting_down`, blocks SCSI requests
+  (`ufshcd_scsi_block_requests`), waits for doorbells (`U64_MAX`,
+  unbounded), flushes `eh_work`, and calls `ufshcd_suspend(hba,
+  UFS_SHUTDOWN_PM)` -> `ufshcd_hba_stop()` (`ufshcd.c:5800-5812`, writes
+  `CONTROLLER_DISABLE` to `REG_CONTROLLER_ENABLE` `0x34` and polls 10x1ms).
+- **Error-discard boundary**: `ufshcd_shutdown()` logs `dev_err` and
+  unconditionally returns `0` ("allow force shutdown even in case of
+  errors") because `device_shutdown()`'s `.shutdown` callback is
+  structurally `void` (`drivers/base/core.c`).
+- **Verification**: Pre-shutdown, `backend_ufs.c` already verifies
+  `UTRLDBR` (`0x58`) and `UTMRLDBR` (`0x78`) via `ufshcd_hold(hba, false)`.
+  Post-shutdown, verify `hba->is_powered == false` / `QKX_CLOCK_GATED`
+  (do NOT call `ufshcd_hold()` after `ufshcd_shutdown()` or it wakes the
+  link back up).
+
+## 3. SyncBoss (`spi1.0`) — Closed
+
+- `syncboss_spi_driver` (`drivers/staging/oculus/mcu/syncboss/syncboss_spi_core.c:2173`)
+  has **no `.shutdown` callback**; `suspend_syncboss=1` in `loader.c:1173`
+  is therefore mandatory.
+- `syncboss_suspend()` (`syncboss_spi_core.c:2092-2123`) waits bounded on
+  `pm_resume_completion`, trylocks `state_mutex`, and calls
+  `stop_streaming_locked()` (`syncboss_spi_core.c:1611-1656`):
+  - `shutdown_syncboss_mcu_locked()` (`line 1473`) sends
+    `SYNCBOSS_SHUTDOWN_MESSAGE_TYPE` and waits bounded for `gpio_ready`
+    low; on timeout it sets `devdata->force_reset_on_open = true` and
+    returns `void` (so `syncboss_suspend()` still returns `0`).
+  - Immediately after, `stop_streaming_locked()` **unconditionally**
+    executes `kthread_stop(devdata->worker)`, cancels `wake_timer` and
+    `send_timer`, sets `devdata->worker = NULL`, unprepares SPI message/HW,
+    and unlocks the SPI bus.
+- **Verification**: SPI DMA is guaranteed stopped once `worker == NULL &&
+  !stop_in_progress` (and `force_reset_on_open == 0` confirms MCU sleep
+  ack). Note that `backend_syncboss.c:80` also requires
+  `streaming_client_count == 0`, which stays > 0 while frozen userspace
+  holds FDs open; post-suspend DMA quiescence is `worker == NULL &&
+  !stop_in_progress`.
+
+## 4. Other DMA (PCIe/CNSS WiFi, Display/SDE, Video/Venus) — Closed
+
+- **CRITICAL GAP FOUND — PCIe WiFi (`cnss`, `0000:01:00.0`, `qcom,pcie@1c00000`)**:
+  - Confirmed active in `preflight-capture/iomem.txt:81-86`.
+  - `# CONFIG_KEXEC is not set` in `device.config`, so
+    `pci_device_shutdown()` (`drivers/pci/pci-driver.c:497`) **skips
+    `pci_clear_master(pci_dev)`**.
+  - Neither `cnss_pci_driver` (`drivers/net/wireless/cnss2/pci.c:5174`),
+    `cnss_platform_driver` (`main.c:2889`), nor `msm_pcie` defines a
+    `.shutdown` callback.
+  - `cnss_reboot_notifier()` (`main.c:2608-2624`) only sets
+    `CNSS_IN_REBOOT` and cancels timers; it does NOT stop MHI/CE DMA or
+    power down the endpoint.
+  - **Concrete fix**: Call `pci_clear_master(pci_dev)` (`EXPORT_SYMBOL`)
+    directly on `0000:01:00.0` (hardware-blocks PCIe bus-master TLPs) plus
+    `msm_pcie_pm_control(MSM_PCIE_SUSPEND, ...)` / `cnss_subsys_shutdown`.
+- **Display / SDE (`techpack/display/msm/msm_drv.c:2125,2159`)**:
+  - Defines `.shutdown = msm_pdev_shutdown`, which runs during
+    `device_shutdown()`, calls `msm_lastclose(ddev)` (atomic disable of
+    CRTCs/planes/SDE DMA pipes), and sets `priv->shutdown_in_progress = true`.
+    (Void callback; `msm_pm_ops.suspend` is available if a checked `int`
+    return is desired prior to `device_shutdown()`.)
+- **Video / Venus (`aa00000.qcom,vidc`, `techpack/video/msm/vidc/`)**:
+  - Has **no `.shutdown`** and **no `reboot_notifier`**.
+  - Has `EXPORT_SYMBOL(msm_vidc_suspend)` (`msm_vidc.c:1770`) and
+    `msm_vidc_pm_suspend()` (`msm_v4l2_vidc.c:721`), returning `int` and
+    invoking `__power_collapse(device, true)`. When `core->instances` is
+    empty (already checked by `backend_video.c`), Venus auto-power-collapses.
+
+## 5. Camera (`techpack/camera/`) — Closed
+
+- Has **no `.shutdown`** and **no `reboot_notifier`**; `freeze_processes()`
+  alone leaves armed VFE/IFE/ICP/CSID hardware DMA running.
+- **Quest-2-specific discovery — two camera stacks**:
+  1. Standard V4L2 (`cam_req_mgr`: `g_dev.open_cnt`, `cam_isp_dev.c:69`
+     `cam_isp_subdev_close`, `cam_icp_subdev.c:120` `cam_icp_subdev_close`)
+     -> `cam_node_shutdown(node)`.
+  2. **Oculus Fastpath** (`g_isp_dev_fastpath.open_cnt` in
+     `cam_isp_dev.c:124`, `g_icp_dev_fastpath.open_cnt` in
+     `cam_icp_subdev.c:185`) -> `cam_node_fastpath_shutdown(fp_node)` ->
+     `cam_icp_mgr_hw_close()`.
+- **Concrete teardown + verification**:
+  - Stopping all userspace camera/tracking owners BEFORE
+    `freeze_processes()` invokes `cam_req_mgr_close()`
+    (`cam_req_mgr_dev.c:178`) -> `cam_req_mgr_handle_core_shutdown()` +
+    `sd->internal_ops->close()` on every subdev, AND closes both fastpath
+    subdevs.
+  - Because `cam_node_shutdown()` (`cam_node.c:710-732`) discards `rc` and
+    ignores `hw_close()`'s return value, independent hardware proof requires
+    verifying `QKX_CLOCK_GATED` across VFE/ICP domains PLUS `open_cnt == 0`
+    on `g_dev` and both fastpath devices (`g_isp_dev_fastpath`,
+    `g_icp_dev_fastpath`).
+
+## 6. ADSP / CDSP / SLPI / FastRPC — Closed
+
+- `fastrpc_file_free()` (`adsprpc.c:4026`) and `fastrpc_device_release()`
+  (`adsprpc.c:4096`) discard errors and return `0`; kernel clients keep
+  ADSP/CDSP/SLPI `SUBSYS_ONLINE`.
+- Neither `subsystem_restart.c` nor `subsys-pil-tz.c` registers a
+  `reboot_notifier` or `.shutdown` callback — `device_shutdown()` NEVER
+  stops ADSP, CDSP, or SLPI.
+- **Guaranteed hardware-reset fix**:
+  - `subsys_shutdown(desc, true)` (`drivers/soc/qcom/subsys-pil-tz.c:835`)
+    asserts SMEM `force_stop_bit` (bounded `STOP_ACK_TIMEOUT_MS`) and calls
+    `pil_shutdown(&d->desc)` (`peripheral-loader.c:1422`, `EXPORT_SYMBOL`)
+    -> `pil_shutdown_trusted()` (`subsys-pil-tz.c:727-762`), which executes
+    the synchronous TrustZone SCM call
+    `scm_call2(SCM_SIP_FNID(SCM_SVC_PIL, PAS_SHUTDOWN_CMD), &desc)`.
+  - `pil_shutdown()` records the exact TZ result in `desc->shutdown_fail`
+    (`false` == TrustZone confirmed Q6 hardware reset & power-off) and
+    calls `pil_notify_aop(desc, "off")`.
+- **Mandatory ordering constraint**: DSP `pil_shutdown()` MUST execute
+  **before** AOP QMP disconnect because `pil_notify_aop()` sends `"off"`
+  over AOP QMP.
+
+## 7. SMMU (`15000000.apps-smmu`, `3da0000.kgsl-smmu`) — Closed
+
+- `drivers/iommu/arm-smmu.c` has **no `.shutdown` callback** (context banks
+  stay intact throughout producer teardown — no premature fault risk).
+- Strictly downstream of all producer halts. On entry into the new kernel,
+  `arm_smmu_device_probe()` calls `arm_smmu_device_reset()`
+  (`arm-smmu.c:5217, 6161`) to reset all context banks and invalidate TLBs.
+
+## 8. Secure Assignments / TrustZone (`qseecom`, `secure_buffer`) — Closed
+
+- `qseecom.c` has no `.shutdown`; TZ apps reside in carved-out
+  `reserved-memory` and execute only synchronously on HLOS SCM calls
+  (inert once CPUs stop).
+- Dynamic `hyp_assign_table` allocations (`adsprpc`, `ion_secure_heap`,
+  `kgsl_sharedmem`, `msm_cvp_dsp`) revert to `VMID_HLOS` when owning
+  userspace processes exit before `freeze_processes()`.
+- Static PIL/TZ/SMEM regions remain protected as `reserved-memory` in
+  `boot.dtb`, and `pil_shutdown()` (`PAS_SHUTDOWN_CMD`) unlocks PIL
+  regions cleanly.
+
+## 9. AOP (`c300000.qcom,qmp-aop`, `18200000.rsc`, `af20000.rsc`) — Closed
+
+- **Why `loader.c:1090` failed on missing `send_irq`**: `static void
+  send_irq()` (`drivers/mailbox/msm_qmp.c:214-229`) was inlined by the
+  compiler. Its implementation only uses `wmb()` + exported
+  `mbox_send_message()`/`mbox_client_txdone()` (IPCC) or `writel_relaxed()`.
+- **QMP**: `qmp_shutdown()` (`msm_qmp.c:423-452`) already calls inlined
+  `send_irq()` and transitions `mbox->local_state` to `LINK_CONNECTED`
+  only upon receiving AOP's real RX interrupt acknowledging channel
+  disconnect. `QMP_MBOX_LINK_DOWN` (`0xFFFF0000`) is never sent by stock
+  `msm_qmp.c` at runtime and remains an unproven peer extension.
+- **RPMh / RSC**: `tcs_is_free()` (`drivers/soc/qcom/rpmh-rsc.c:113-116`)
+  checks `!test_bit(tcs_id, drv->tcs_in_use)`, which is only cleared by
+  AOP's hardware `tcs_tx_done` IRQ. Once secondary CPUs are offline
+  (`machine_shutdown()`), draining `tcs_in_use & 0x3 == 0` on
+  `18200000.rsc` (already observed by `backend_aop.c`) + calling
+  `rpmh_flush(rpmh_dev)` (`loader.c:1253`, checked `int` return) proves
+  zero in-flight active/sleep/wake TCS transactions remain.
+
+## 10. GPU (`3d00000.qcom,kgsl-3d0`) — Closed (commits `37ee738`, `8e779b4`)
+
+- `adreno_pm_suspend()` -> `kgsl_pwrctrl_change_state()` -> `_suspend()`
+  drains queues, waits on `kgsl_active_count_wait(device, 0)` + `.idle()`,
+  propagates errors to `qkx_execute()`, and preserves GPU SMMU attachment
+  through suspend.
+
+## Required Stage 2 Teardown Order (Summary)
+
+1. **Pre-freeze (userspace)**: Stop Horizon camera/tracking, media/Venus,
+   FastRPC, and WLAN services so stock VFS `fput()` tears down Camera
+   (both `cam_req_mgr` and Oculus Fastpath), Venus instances, and dynamic
+   `hyp_assign_table` buffers; verify Camera `open_cnt == 0` + clock-gated
+   and Video `instances` empty.
+2. **Freeze userspace** (`freeze_processes()`, closing admission).
+3. **Checked reversible suspends**: GPU (`adreno_pm_suspend`), SyncBoss
+   (`syncboss_suspend`, verify `worker == NULL`), Video (`msm_vidc_suspend`
+   if needed).
+4. **Irreversible hardware stops (ordered)**:
+   - PCIe/CNSS WiFi: `pci_clear_master(0000:01:00.0)` + `msm_pcie_pm_control(MSM_PCIE_SUSPEND)` / `cnss_subsys_shutdown`.
+   - USB DWC3: under `dwc->lock`, call `dwc3_gadget_run_stop(dwc, 0, 0)` (check return!), then `synchronize_irq(dwc->irq_gadget)`.
+   - ADSP / CDSP / SLPI: `subsys_shutdown(desc, true)` -> `pil_shutdown()` -> verify `desc->shutdown_fail == false` (MUST precede AOP QMP disconnect).
+   - AOP QMP: `qmp_shutdown()` on assigned channels -> wait for `local_state == LINK_CONNECTED` (real AOP ack).
+   - `kernel_restart_prepare()` / `device_shutdown()` (runs `ufshcd_shutdown()` and `msm_pdev_shutdown()`); verify UFS powered off / clock-gated.
+   - `migrate_to_reboot_cpu()` + `machine_shutdown()` (offline secondary CPUs).
+   - RPMh/RSC: verify `18200000.rsc` active TCS bits (`0x3`) clear + `rpmh_flush(rpmh_dev)` (check return!).
