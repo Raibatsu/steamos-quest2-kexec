@@ -3,17 +3,25 @@
  * Video (Venus) shutdown-safety backend - this is what the shutdown
  * framework's QKX_SHUTDOWN_OTHER_DMA slot is used for here.
  *
- * Real evidence: msm_comm_session_abort() in msm_vidc_common.c sends the
- * HFI abort command then does a genuine wait_for_completion_timeout() on
- * the firmware's HAL_SESSION_ABORT_DONE response - a real round-trip
- * handshake. That function and the HFI session state are private to the
- * vidc driver (no exported query for "is any session active" was found),
- * so this backend uses the same generic, real, exported signal as the
- * SyncBoss backend: the Venus core platform device's own runtime-PM
- * accounting, at its confirmed device-tree address (qcom,vidc@aa00000).
+ * REVISED after the Camera backend's success with the same general
+ * technique. msm_v4l2_vidc.c's probe() calls dev_set_drvdata(&pdev->dev,
+ * core) (confirmed directly), so struct msm_vidc_core is reachable via
+ * the same safe pattern as UFS: bus_find_device_by_name() +
+ * dev_get_drvdata(), no fragile offset trick needed.
+ *
+ * Offsets resolved from this exact device's own /sys/kernel/btf/vmlinux
+ * (same method proven for Camera/SyncBoss this session) against struct
+ * msm_vidc_core: `instances` (a list_head of active msm_vidc_inst
+ * sessions - empty means no active video session, the same kind of
+ * signal camera_dsp_diag.c reads for cam_req_mgr's session list) and
+ * `lock`, the real mutex guarding it (mutex_trylock()'d here; busy
+ * means inconclusive, never blocks). probe_kernel_read() throughout -
+ * ordinary kernel heap memory via a legitimately obtained drvdata
+ * pointer, not hardware MMIO.
  */
 #include <linux/errno.h>
-#include <linux/pm_runtime.h>
+#include <linux/uaccess.h>
+#include <linux/mutex.h>
 #include <linux/device.h>
 #include <linux/platform_device.h>
 #include "qkx_common.h"
@@ -23,18 +31,47 @@
 		      QKX_SHUTDOWN_CAP(QKX_SHUTDOWN_DRAIN) | \
 		      QKX_SHUTDOWN_CAP(QKX_SHUTDOWN_STOP))
 
+#define QKX_VID_LOCK_OFF	16
+#define QKX_VID_INSTANCES_OFF	4968
+
 static bool qkx_video_quiet(void)
 {
 	struct device *dev;
-	bool suspended;
+	void *core;
+	struct mutex *lock;
+	void *instances_next = (void *)1; /* non-NULL default: fail safe */
+	void *instances_addr;
+	bool empty;
 
 	dev = bus_find_device_by_name(&platform_bus_type, NULL, "aa00000.qcom,vidc");
 	if (!dev)
 		return false;
 
-	suspended = pm_runtime_status_suspended(dev);
+	core = dev_get_drvdata(dev);
+	if (!core) {
+		put_device(dev);
+		return false;
+	}
+
+	lock = (struct mutex *)((char *)core + QKX_VID_LOCK_OFF);
+	if (!mutex_trylock(lock)) {
+		put_device(dev);
+		return false; /* busy: inconclusive, not idle */
+	}
+
+	instances_addr = (char *)core + QKX_VID_INSTANCES_OFF;
+	if (probe_kernel_read(&instances_next, instances_addr, sizeof(instances_next))) {
+		mutex_unlock(lock);
+		put_device(dev);
+		return false;
+	}
+	mutex_unlock(lock);
 	put_device(dev);
-	return suspended;
+
+	/* An empty list_head's own next pointer points back to itself. */
+	empty = (instances_next == instances_addr);
+	pr_info("qkx_backends: [video] instances_empty=%d\n", empty);
+	return empty;
 }
 
 static int vid_inspect(void *context, struct qkx_shutdown_inventory *inv)
