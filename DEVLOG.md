@@ -1012,3 +1012,50 @@ kernel at all (Quest 2 uses techpack/camera, already confirmed via its
 real v4l-subdev names). No matching device nodes exist live either.
 This closes the side-door search cleanly: nothing on this specific
 device holds a reachable qseecom_handle, confirmed rather than assumed.
+
+## Real action testing: complete coverage, and an honest line about what it does and doesn't prove
+
+Extended beyond observation-only tonight, methodically and carefully:
+
+| Subsystem | Real action tested | Mechanism |
+| --- | --- | --- |
+| ADSP, CDSP | acquire + immediate release | `subsystem_get()`/`subsystem_put()` |
+| Venus | acquire + immediate release | `subsystem_get()`/`subsystem_put()` |
+| a650_zap (GPU-adjacent) | acquire + immediate release | `subsystem_get()`/`subsystem_put()` |
+| SPSS (secure-adjacent) | acquire + immediate release | `subsystem_get()`/`subsystem_put()` |
+| WLAN, NPU, CVPSS | acquire + immediate release | `subsystem_get()`/`subsystem_put()` |
+| UFS | acquire + immediate release | `ufshcd_hold()`/`ufshcd_release()` |
+
+Every one of these tested on real hardware, each at least twice (initial
+run plus an unload/reload to confirm identical, stable results), zero
+crashes, nothing concerning in dmesg, device fully responsive throughout
+every single test.
+
+### The honest line this round does NOT cross
+
+Every test above only ever acquires a reference this module did not
+previously hold, then immediately releases it again - the subsystem's
+real refcount never actually reaches zero because of anything this
+module did (other legitimate holders keep it above zero throughout).
+This proves the *mechanism* is safe to call - the API itself, the
+locking, the module refcounting - but it does **not** prove what
+happens when a refcount actually reaches zero and `subsys_stop()`'s real
+teardown sequence (`sysmon_send_shutdown()` + the PIL `shutdown()`
+callback) actually runs. That is the specific thing `qkx_dma_gate()`'s
+refusal is actually about, and it remains genuinely untested by
+anything in this round.
+
+Same honest gap for UFS: `ufshcd_hold()`/`ufshcd_release()` is a
+wake-and-keep-awake primitive, not a stop primitive - proving it's safe
+to call doesn't say anything about UFS's own teardown path.
+
+### Where this leaves confidence toward the gate
+
+Real, valuable progress: the acquire/release *mechanics* for 10 real
+targets are now proven safe on this exact hardware, not assumed. But
+confidence in the actual gate decision needs confidence in the
+*teardown* path specifically, which is a materially bigger, more
+consequential step - it would mean actually invoking a real subsystem
+stop, not bracketing one. That decision deserves its own explicit
+discussion before attempting, not a natural continuation of this round's
+pace.
