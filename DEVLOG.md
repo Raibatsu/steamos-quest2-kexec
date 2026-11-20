@@ -1229,3 +1229,23 @@ unconditionally - this flag is always on in this project's actual build.
 containing qkx_dma_gate() and prepare(NULL)). Confirms the runtime gate
 studied in the last two entries is the real, live, singular, operative
 barrier in this exact build - not a dormant or already-bypassed check.
+
+## Literal confirmation of "remove paths" in the gate's own wording
+
+Checked cam_req_mgr_dev.c's actual .remove callback (cam_req_mgr_remove,
+line 777) for comparison. It is real, substantial teardown code -
+cam_req_mgr_core_device_deinit(), media/video device cleanup,
+mutex_destroy(&g_dev.dev_lock), resets g_dev.state - the same g_dev
+struct backend_camera.c reads. But .remove() is a platform_driver field
+only ever invoked on explicit driver unbind (driver_unregister(),
+sysfs unbind, module exit) - never by device_shutdown(), which only
+ever consults .shutdown. This is the literal, concrete match to the
+gate's own wording ("does not run their remove paths"): a real,
+working teardown path exists in the driver, confirmed directly, and a
+real kexec jump would never reach it.
+
+Not something this session attempted to call directly - cam_req_mgr_remove()
+is static (not exported), and invoking driver-unbind-time teardown logic
+on a live, possibly-in-use driver from outside is a materially more
+invasive action than anything else explored this session. Purely
+confirmatory research.
