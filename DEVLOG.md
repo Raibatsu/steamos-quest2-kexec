@@ -999,3 +999,16 @@ sysfs, the handle struct's own shape) - not something to keep digging at
 with tonight's toolkit. The gap is real and specific: no drvdata path
 exists, and no externally-verifiable offset (the kind camera's
 pre-existing prior art provided) exists either.
+
+### qseecom_handle side-door search, completed - confirmed dead end
+
+The broader search across drivers/+techpack/ for other qseecom_handle
+holders (started before the conclusion above, finished after) found
+exactly three hits: `msm_camera_tz_util.c`, `mpq_sdmx.c` (DVB demux),
+and `msm_camera_tz_i2c.c` - all three in the legacy `camera_v2` driver
+tree. Confirmed directly against this device's own captured config:
+`CONFIG_MSM_CAMERA is not set` - camera_v2 isn't compiled into this
+kernel at all (Quest 2 uses techpack/camera, already confirmed via its
+real v4l-subdev names). No matching device nodes exist live either.
+This closes the side-door search cleanly: nothing on this specific
+device holds a reachable qseecom_handle, confirmed rather than assumed.
