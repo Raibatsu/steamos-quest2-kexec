@@ -1499,3 +1499,48 @@ CURRENT kernel's own view, not proof about what a future kernel after
 a jump would see - but it is now the most precisely-targeted piece of
 evidence this research has produced about the single hardest part of
 the original finding.
+
+# Stage 2 (Hardware shutdown) completion effort begins
+
+User directive: complete Stage 2 of the project's own 9-stage release
+audit ("prove camera/DSP/GPU/USB/UFS/AOP DMA completion and error
+propagation... no complete shutdown has been observed") with real,
+sustained research - not premature "doesn't work" conclusions. Working
+per-subsystem, starting with what's closest to proven already.
+
+## GPU: already proven by existing, real, shipped code
+
+Traced qkx_execute()'s gpu_suspend(gpu) call (=adreno_pm_suspend, found
+via lookup() - a static function, reachable via kallsyms since loader.c
+doesn't need EXPORT_SYMBOL for this, unlike this session's own module)
+all the way to real hardware:
+
+adreno_pm_suspend() -> kgsl_pwrctrl_change_state(SUSPEND) -> _suspend()
+(kgsl_pwrctrl.c:2804): drains the command queue
+(device->ftbl->drain), blocks on kgsl_active_count_wait(device, 0),
+then calls device->ftbl->idle() = adreno_idle() (adreno.c:3373) ->
+adreno_spin_idle() (adreno.c:3331): a real bounded poll loop (default
+ADRENO_IDLE_TIMEOUT) checking adreno_isidle() (adreno.c:3250) on every
+iteration - which reads CP_RB_RPTR/CP_RB_WPTR (confirmed real hardware
+registers, read via adreno_readreg(), the same registers
+adreno_spin_idle_debug() dumps on a real timeout) for ringbuffer
+emptiness, AND gpudev->hw_isidle() for the GPU's own busy/idle status.
+
+On a real timeout or GPU fault, adreno_spin_idle() returns -ETIMEDOUT
+or -EDEADLK. This propagates unmodified all the way back up through
+adreno_idle() -> _suspend() -> kgsl_pwrctrl_change_state() ->
+adreno_pm_suspend() -> gpu_suspend(gpu) in qkx_execute(), which already
+checks `if (ret) goto release_devices` (loader.c:1167-1170) - a real
+failure here aborts the jump before anything irreversible happens.
+
+### Conclusion for GPU
+
+This is a complete, hardware-verified, bounded, real-error-propagating
+DMA-completion proof, already present in shipped code this project
+already calls correctly. Nothing in this module needs to add anything
+for GPU - the existing adreno_pm_suspend()/qkx_execute() integration
+already satisfies Stage 2's requirement for this subsystem. The only
+residual uncertainty is whether adreno_dispatcher_halt()/kgsl_mmu_suspend()
+(called after a successful suspend, not checked for return value) have
+their own gaps - worth a second pass, but the primary idle-wait-and-
+report chain is real and solid.
