@@ -22,10 +22,60 @@
  * correctness rides on those checks, not on anything checkable here.
  */
 #include <linux/errno.h>
+#include <linux/uaccess.h>
+#include <linux/platform_device.h>
 #include "qkx_common.h"
 #include "qkx_ctx.h"
 
 #define QKX_SMMU_CAPS QKX_SHUTDOWN_CAP(QKX_SHUTDOWN_RELEASE)
+
+#define QKX_APPS_SMMU_DEV	"15000000.apps-smmu"
+#define QKX_SMMU_CONTEXT_MAP_OFF	72
+#define QKX_SMMU_NUM_CBS_OFF		64
+
+/* Informational only - does not change the pass-through verdict below,
+ * for the same reason as AOP's tcs_in_use read: this shows which
+ * context banks THIS kernel's own bookkeeping currently has allocated
+ * (arm-smmu.c's probe() calls platform_set_drvdata(pdev, smmu),
+ * confirmed directly, so struct arm_smmu_device is reachable the same
+ * safe way as every other upgraded backend this session), not an
+ * independent proof that no DMA master is using them right now - that
+ * proof still rests entirely on the other 9 backends having already
+ * confirmed their own hardware idle, as the rest of this file explains.
+ * context_map is a plain software bitmap (DECLARE_BITMAP, ordinary
+ * kernel memory, not a hardware register), confirmed in arm-smmu.c's
+ * own struct arm_smmu_device definition - no SError risk. Checked
+ * "15000000.apps-smmu" specifically: the main, broadly-shared SMMU
+ * instance most already-covered peripherals use (GPU has its own
+ * separate instance, 3da0000.kgsl-smmu, already covered via KGSL's own
+ * state in the GPU backend). Offsets resolved from this device's own
+ * /sys/kernel/btf/vmlinux.
+ */
+static void qkx_smmu_log_context_map(void)
+{
+	struct device *dev;
+	void *smmu;
+	unsigned long bitmap[2] = { ~0UL, ~0UL }; /* non-zero default: fail safe */
+	u32 num_cbs = 0;
+
+	dev = bus_find_device_by_name(&platform_bus_type, NULL, QKX_APPS_SMMU_DEV);
+	if (!dev) {
+		pr_info("qkx_backends: [smmu] %s not found\n", QKX_APPS_SMMU_DEV);
+		return;
+	}
+
+	smmu = dev_get_drvdata(dev);
+	if (!smmu) {
+		put_device(dev);
+		return;
+	}
+
+	if (!probe_kernel_read(&num_cbs, (char *)smmu + QKX_SMMU_NUM_CBS_OFF, sizeof(num_cbs)) &&
+	    !probe_kernel_read(bitmap, (char *)smmu + QKX_SMMU_CONTEXT_MAP_OFF, sizeof(bitmap)))
+		pr_info("qkx_backends: [smmu] %s num_context_banks=%u context_map=0x%lx%016lx (this kernel's own view only)\n",
+			QKX_APPS_SMMU_DEV, num_cbs, bitmap[1], bitmap[0]);
+	put_device(dev);
+}
 
 static int smmu_inspect(void *context, struct qkx_shutdown_inventory *inv)
 {
@@ -47,6 +97,8 @@ static int smmu_inspect(void *context, struct qkx_shutdown_inventory *inv)
 static int smmu_begin(void *context, const struct qkx_shutdown_key *key,
 		       struct qkx_shutdown_receipt *receipt)
 {
+	qkx_smmu_log_context_map();
+
 	receipt->key = *key;
 	receipt->state = QKX_SHUTDOWN_COMPLETE;
 	receipt->evidence = qkx_evidence_for(key);
