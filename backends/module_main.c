@@ -458,6 +458,17 @@ static void qkx_adsp_real_action_test(void)
 	qkx_subsys_real_action_test("venus");
 	qkx_subsys_real_action_test("a650_zap");
 	qkx_subsys_real_action_test("spss");
+	/* Remaining subsystem_restart-managed entities confirmed present on
+	 * this device (/sys/class/subsys/) that do not map to one of this
+	 * module's own 10 backend categories, but are real, DMA-capable
+	 * masters a real kexec jump would need to care about regardless -
+	 * wlan (WCSS, Wi-Fi/BT), npu, and cvpss (computer-vision processing,
+	 * camera-tracking-adjacent). Completing coverage here, not just the
+	 * subset already tied to an existing backend.
+	 */
+	qkx_subsys_real_action_test("wlan");
+	qkx_subsys_real_action_test("npu");
+	qkx_subsys_real_action_test("cvpss");
 }
 
 static int __init qkx_backends_init(void)
