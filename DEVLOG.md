@@ -928,3 +928,39 @@ failure mode that primitive likely would not have caught. The
 hash-anchor verification and trylock-everywhere design are the parts
 genuinely worth adapting; probe_kernel_read doesn't directly cover what
 actually crashed this session.
+
+## Checked Secure/TZ for the same upgrade - genuinely blocked, not just hard
+
+After upgrading 8 of 10 backends tonight with real BTF-verified private
+struct reads (Camera, SyncBoss, Video, ADSP, GPU, USB, AOP-informational,
+SMMU-informational), checked whether qseecom could get the same
+treatment.
+
+`static struct qseecom_control qseecom;` in qseecom.c (confirmed
+directly) - a plain static global, exactly like camera's g_dev, with
+zero dev_set_drvdata()/platform_set_drvdata() calls anywhere in the
+file. The only way to reach it from outside is the same kind of
+function-relative-offset trick used for camera's g_dev.
+
+The real difference from camera: WitherBlitz had already done that
+specific reverse-engineering work and published a testable offset
+(cam_req_mgr_is_open + 0x12d8c00) with a known-good anchor hash we could
+independently verify against. For qseecom, no such prior art exists -
+there is no known offset to test, which means computing one now would
+mean blind disassembly of this device's own vmlinux with no independent
+way to confirm correctness. That's a fundamentally different risk than
+everything else attempted tonight: every other upgrade either used a
+safe, standard dev_get_drvdata() path, or (for camera) had a specific,
+externally-verifiable number to check before trusting it. Guessing a
+new offset blind would mean trusting our own reverse-engineering with no
+cross-check at all - precisely the kind of unverified assumption that
+caused two real crashes earlier this session.
+
+### Conclusion
+
+Secure/TZ remains a pass-through. Not for lack of trying, and not
+because the data doesn't exist (registered_app_list_head is real,
+useful information) - but because reaching it safely would require
+genuinely new reverse-engineering work this session doesn't have the
+tools or time to independently verify, unlike every other upgrade
+tonight which did.
