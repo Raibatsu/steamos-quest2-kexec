@@ -1544,3 +1544,24 @@ residual uncertainty is whether adreno_dispatcher_halt()/kgsl_mmu_suspend()
 (called after a successful suspend, not checked for return value) have
 their own gaps - worth a second pass, but the primary idle-wait-and-
 report chain is real and solid.
+
+### GPU refinement: SMMU context stays attached, which is why there's no ordering risk today
+
+Checked kgsl_mmu_suspend() (called after the real hardware-idle wait
+succeeds) -> kgsl_iommu_suspend() (kgsl_iommu.c:2020): this does NOT
+detach GPU's IOMMU/SMMU context at all - it only clears an extra
+power-vote on config clocks if one was taken. The real context detach
+(_detach_context() for user/lpac/secure contexts) lives in
+kgsl_iommu_close(), only called on driver .remove() - same category as
+Camera's cam_req_mgr_remove(), never invoked by generic shutdown.
+
+This means GPU's SMMU context remains attached throughout the existing
+suspend sequence. That is consistent with, not contrary to, the gate's
+own named risk ("detaching SMMU domains first could expose live DMA") -
+the risk is about detaching while DMA might still be live; nothing
+detaches GPU's context today, so that specific risk cannot trigger for
+GPU as the code stands. The genuinely useful fact this establishes: GPU
+hardware-idle is real and proven (previous entry), so IF SMMU context
+detachment were ever added to the jump sequence for GPU specifically,
+this is the exact point where doing so would be safe to add - DMA
+completion would already be confirmed before it happened.
