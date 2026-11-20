@@ -1283,3 +1283,36 @@ confirms the notification side of that same mechanism fires for real
 and would be immediately visible, not latent. Reinforces, with a
 concrete causal chain now rather than general caution, why no test this
 session attempted to drive any subsystem's refcount to zero.
+
+## loader.c's existing real producer-quiescing code, and what it still doesn't cover
+
+Read qkx_execute()'s full body between the dma_gate check and
+prepare(NULL) (loader.c:1074-1227) to catalog what real, already-built
+quiescing code exists there, separate from this session's own module:
+
+- GPU: adreno_pm_suspend() (real driver suspend callback)
+- USB: dwc3_gadget_suspend() (real, stops gadget traffic/Run-Stop
+  without full driver unbind)
+- SyncBoss: its own driver's PM suspend callback, if suspend_syncboss
+  requested
+- Watchdog: disabled via its own sysfs-equivalent store function
+- AOP: qkx_disconnect_aop_qmp() (loader.c:956) - a real, substantial
+  implementation that closes assigned QMP mailbox channels, writes a
+  link-down state via raw MMIO, sends an IRQ, and waits for AOP's
+  acknowledgement, if disconnect_qmp requested
+
+Explicitly absent from this list: Camera, DSP/ADSP, Video/Venus, SMMU.
+Nothing in qkx_execute() touches any of them - directly consistent
+with and reinforcing exactly what qkx_dma_gate()'s comment warns about.
+
+Checked whether qkx_disconnect_aop_qmp() incidentally covers this
+session's own AOP finding (rpmh-rsc.c's tcs_in_use bitmap, zeroed blind
+on probe with no hardware verification - the stale-TCS-slot race
+documented in backend_aop.c). Confirmed it does not: qmp_shutdown()
+lives in drivers/mailbox/msm_qmp.c, a completely separate mailbox
+driver from rpmh-rsc.c. QMP is AOP's messaging/command channel; RSC/TCS
+is the separate hardware command-queue AOP's firmware reads from
+on wake. Even with this real, already-built AOP-QMP-disconnect code in
+place, the TCS stale-slot concern remains a genuinely separate,
+unaddressed gap - not already covered by existing work this session
+hadn't looked at.
