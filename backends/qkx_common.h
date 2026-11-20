@@ -162,10 +162,22 @@ static inline enum qkx_clock_state qkx_clock_domain_state(struct bus_type *bus,
  * the same value. Verified against shutdown.c's source directly, not
  * guessed: FORWARD direction reports the single action bit; UNDO reports
  * NO_LATE_COMPLETION plus either ADMISSION_CLOSED (for a CLOSE undo) or
- * RESTORED (for anything else); REOPEN is not used by any backend here.
+ * RESTORED (for anything else); REOPEN reports NO_LATE_COMPLETION plus
+ * ADMISSION_REOPENED.
+ *
+ * REOPEN was genuinely missed here originally (the comment used to claim
+ * "not used by any backend" - true for every individual self-test, which
+ * only ever constructs FORWARD keys, but false the first time the real
+ * orchestrator's rollback path was actually run end to end: it issues a
+ * REOPEN key for any attempted CLOSE action during rollback. Caught by
+ * running qkx_shutdown_run() for real, not by inspection - exactly the
+ * kind of bug that only surfaces under real integration, which is why
+ * that test was worth doing.
  */
 static inline unsigned int qkx_evidence_for(const struct qkx_shutdown_key *key)
 {
+	if (key->direction == QKX_SHUTDOWN_REOPEN)
+		return QKX_SHUTDOWN_NO_LATE_COMPLETION | QKX_SHUTDOWN_ADMISSION_REOPENED;
 	if (key->direction == QKX_SHUTDOWN_UNDO)
 		return QKX_SHUTDOWN_NO_LATE_COMPLETION |
 			(key->action == QKX_SHUTDOWN_CLOSE ?

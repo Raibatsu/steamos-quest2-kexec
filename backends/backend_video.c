@@ -98,7 +98,7 @@ static int vid_begin(void *context, const struct qkx_shutdown_key *key,
 	if (qkx_video_quiet()) {
 		receipt->state = QKX_SHUTDOWN_COMPLETE;
 		receipt->evidence = qkx_evidence_for(key);
-		receipt->quiesced_attempt = key->attempt;
+		receipt->quiesced_attempt = key->original_attempt;
 	} else {
 		receipt->state = QKX_SHUTDOWN_PENDING;
 	}

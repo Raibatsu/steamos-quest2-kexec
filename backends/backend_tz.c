@@ -49,7 +49,7 @@ static int tz_begin(void *context, const struct qkx_shutdown_key *key,
 	receipt->key = *key;
 	receipt->state = QKX_SHUTDOWN_COMPLETE;
 	receipt->evidence = qkx_evidence_for(key);
-	receipt->quiesced_attempt = key->attempt;
+	receipt->quiesced_attempt = key->original_attempt;
 	return 0;
 }
 

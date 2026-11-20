@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include <linux/module.h>
 #include <linux/kernel.h>
+#include <linux/ktime.h>
 #include "shutdown.h"
 #include "qkx_ctx.h"
 
@@ -92,6 +93,64 @@ static void qkx_self_test(void)
 	}
 }
 
+/* Declared in shutdown.c, the real orchestrator (not written by this
+ * module - WitherBlitz's own, copied in unmodified per the attribution
+ * in shutdown.c itself).
+ */
+extern int qkx_shutdown_validate(const struct qkx_shutdown_plan *plan,
+	const struct qkx_shutdown_backend *backends, unsigned int count);
+extern int qkx_shutdown_run(const struct qkx_shutdown_plan *plan,
+	const struct qkx_shutdown_backend *backends, unsigned int count,
+	struct qkx_shutdown_result *result);
+
+static int qkx_now_ns(void *context, u64 *now)
+{
+	*now = ktime_get_ns();
+	return 0;
+}
+
+/* First real test of the actual orchestrator (shutdown.c) against real
+ * backends, rather than the mock backends in its own test harness. Short
+ * budgets on purpose: this is a research probe, not a real shutdown
+ * attempt, and several backends are genuinely busy right now (ADSP
+ * online, SyncBoss streaming, USB not in LPM) - a real run is expected
+ * to time out and exercise the rollback path, which is exactly what we
+ * want to see working for the first time.
+ */
+static void qkx_orchestration_test(void)
+{
+	struct qkx_shutdown_plan plan = {
+		.epoch = qkx_epoch,
+		.transaction = 1,
+		.forward_budget_ns = 500ULL * 1000 * 1000,   /* 500ms */
+		.rollback_budget_ns = 500ULL * 1000 * 1000,  /* 500ms */
+		.forward_poll_limit = 50,
+		.rollback_poll_limit = 50,
+		.now_ns = qkx_now_ns,
+	};
+	struct qkx_shutdown_result result = { 0 };
+	int ret;
+
+	ret = qkx_shutdown_validate(&plan, qkx_backends, QKX_SHUTDOWN_SUBSYSTEMS);
+	pr_info("qkx_backends: [orchestration] validate=%d (0=all backends accepted)\n", ret);
+	if (ret)
+		return;
+
+	ret = qkx_shutdown_run(&plan, qkx_backends, QKX_SHUTDOWN_SUBSYSTEMS, &result);
+	pr_info("qkx_backends: [orchestration] run ret=%d complete=%d error=%d failed_stage=%d "
+		"attempted=%u completed=%u rolled_back=%u admission_reopened=%u "
+		"irreversible=%d recovery_required=%d forward_polls=%u rollback_polls=%u\n",
+		ret, result.complete, result.error, result.failed_stage,
+		result.attempted, result.completed, result.rolled_back,
+		result.admission_reopened, result.irreversible, result.recovery_required,
+		result.forward_polls, result.rollback_polls);
+	if (!result.complete)
+		pr_info("qkx_backends: [orchestration] failed at subsystem=%s action=%u direction=%u backend_return=%d\n",
+			result.failed.subsystem < QKX_SHUTDOWN_SUBSYSTEMS ?
+				qkx_subsys_names[result.failed.subsystem] : "none",
+			result.failed.action, result.failed.direction, result.backend_return);
+}
+
 static int __init qkx_backends_init(void)
 {
 	int i;
@@ -120,6 +179,7 @@ static int __init qkx_backends_init(void)
 		QKX_SHUTDOWN_SUBSYSTEMS);
 
 	qkx_self_test();
+	qkx_orchestration_test();
 	return 0;
 }
 
