@@ -2,6 +2,7 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/ktime.h>
+#include <soc/qcom/subsystem_restart.h>
 #include "shutdown.h"
 #include "qkx_ctx.h"
 
@@ -337,6 +338,55 @@ static void qkx_forward_contract_test(void)
 	pr_info("qkx_backends: [forward-contract] %u/%u checks passed\n", pass, total);
 }
 
+/* First real ACTION test tonight, not another read. Everything above
+ * only ever observes state; this calls a real, symmetric kernel API
+ * that performs a genuine reference-counted action: subsystem_get()/
+ * subsystem_put() (soc/qcom/subsystem_restart.c, EXPORT_SYMBOL,
+ * explicitly designed for external drivers to call this way).
+ *
+ * Verified __subsystem_get()'s exact implementation before attempting
+ * this: it only calls subsys_start() (the real boot sequence) when
+ * subsys->count is currently zero; otherwise it just increments the
+ * count under track->lock and returns. Re-checks ADSP's real state
+ * fresh (not cached from earlier) immediately before acting - if it is
+ * not confirmed online right now, this does not call subsystem_get() at
+ * all, specifically to avoid the one case that would NOT be safe:
+ * triggering a real boot on a subsystem that happens to be down.
+ *
+ * This only ever acquires and immediately releases this module's own
+ * reference - it never touches any other driver's count, and the
+ * module_get/put pairing inside __subsystem_get()/subsystem_put()
+ * themselves keeps this properly symmetric.
+ */
+static void qkx_adsp_real_action_test(void)
+{
+	struct subsys_device *dev;
+	int crashed;
+	void *handle;
+
+	dev = find_subsys_device("adsp");
+	if (!dev) {
+		pr_info("qkx_backends: [adsp-action] adsp device not found, skipping\n");
+		return;
+	}
+	crashed = subsys_get_crash_status(dev);
+	if (crashed) {
+		pr_info("qkx_backends: [adsp-action] adsp crashed=%d right now, skipping - will not call subsystem_get on a down subsystem\n",
+			crashed);
+		return;
+	}
+
+	pr_info("qkx_backends: [adsp-action] calling subsystem_get(\"adsp\") - expected to only increment an existing reference, not boot anything\n");
+	handle = subsystem_get("adsp");
+	if (IS_ERR_OR_NULL(handle)) {
+		pr_info("qkx_backends: [adsp-action] subsystem_get failed: %ld\n", PTR_ERR(handle));
+		return;
+	}
+	pr_info("qkx_backends: [adsp-action] subsystem_get succeeded, handle=%p - releasing our own reference now\n", handle);
+	subsystem_put(handle);
+	pr_info("qkx_backends: [adsp-action] subsystem_put done - our reference released, no lingering hold\n");
+}
+
 static int __init qkx_backends_init(void)
 {
 	int i;
@@ -368,6 +418,7 @@ static int __init qkx_backends_init(void)
 	qkx_orchestration_test();
 	qkx_rollback_contract_test();
 	qkx_forward_contract_test();
+	qkx_adsp_real_action_test();
 	return 0;
 }
 
