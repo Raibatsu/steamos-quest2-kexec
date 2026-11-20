@@ -1186,3 +1186,28 @@ subsystem_restart entity) would need to genuinely substitute for that
 missing coverage before this gate's refusal could be responsibly
 reconsidered. Still have not touched the gate itself, and no changes to
 loader.c were made.
+
+## Closing a gap in the previous table: DSP's underlying platform_device
+
+The previous table noted DSP/ADSP's real teardown is subsystem_restart-
+managed, separate from device_shutdown(). One loose end: subsys-pil-tz.c
+assigns a .shutdown field in two places (pil_reset_ops.shutdown =
+pil_shutdown_trusted at line 805, and subsys_desc.shutdown =
+subsys_shutdown at line 1159) - but subsys_desc.dev = &pdev->dev means
+there's also a real, underlying platform_device. Checked whether THAT
+device's own platform_driver registers .shutdown (which device_shutdown()
+would actually call) - confirmed it does not:
+
+    static struct platform_driver pil_tz_driver = {
+        .probe = pil_tz_driver_probe,
+        .remove = pil_tz_driver_exit,
+        .driver = { .name = "subsys-pil-tz", ... },
+    };
+
+No .shutdown field at all - only .probe/.remove. Both earlier .shutdown
+assignments belong to pil_reset_ops and subsys_desc, PIL's own internal
+vtables, only ever invoked through subsystem_restart.c's explicit
+subsystem_put()-to-zero path, never through the generic device_shutdown()
+walk. This closes the question with certainty rather than inference:
+DSP/ADSP gets zero generic shutdown coverage during a real kexec jump,
+same as the other 7 non-UFS subsystems.
