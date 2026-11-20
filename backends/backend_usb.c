@@ -18,7 +18,19 @@
 
 static bool qkx_usb_halted(void)
 {
-	u32 dsts = qkx_read_phys(QKX_PA_USB0, 0x100000, QKX_USB_DSTS);
+	u32 dsts;
+	enum qkx_clock_state clk = qkx_clock_domain_state(&platform_bus_type, QKX_DEV_USB0);
+
+	/* Gated clock means no possible in-flight transfer - confirmed
+	 * halted without reading a register, and without the SError risk a
+	 * gated-peripheral read raised on real hardware this session.
+	 */
+	if (clk == QKX_CLOCK_GATED)
+		return true;
+	if (clk != QKX_CLOCK_ACTIVE)
+		return false;
+
+	dsts = qkx_read_phys(QKX_PA_USB0, 0x100000, QKX_USB_DSTS);
 
 	if (dsts == 0xffffffff)
 		return false;

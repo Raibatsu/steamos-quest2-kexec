@@ -20,8 +20,20 @@
 
 static bool qkx_ufs_doorbells_clear(void)
 {
-	u32 tr = qkx_read_phys(QKX_PA_UFS, 0x1000, QKX_UFS_UTRLDBR);
-	u32 tm = qkx_read_phys(QKX_PA_UFS, 0x1000, QKX_UFS_UTMRLDBR);
+	u32 tr, tm;
+	enum qkx_clock_state clk = qkx_clock_domain_state(&platform_bus_type, QKX_DEV_UFS);
+
+	/* Gated clock means no possible outstanding transaction - confirmed
+	 * idle without reading a register, and without the SError risk a
+	 * gated-peripheral read raised on real hardware this session.
+	 */
+	if (clk == QKX_CLOCK_GATED)
+		return true;
+	if (clk != QKX_CLOCK_ACTIVE)
+		return false;
+
+	tr = qkx_read_phys(QKX_PA_UFS, 0x1000, QKX_UFS_UTRLDBR);
+	tm = qkx_read_phys(QKX_PA_UFS, 0x1000, QKX_UFS_UTMRLDBR);
 
 	if (tr == 0xffffffff || tm == 0xffffffff)
 		return false;

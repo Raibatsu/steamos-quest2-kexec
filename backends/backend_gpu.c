@@ -28,9 +28,23 @@
 
 static bool qkx_gpu_is_idle(void)
 {
-	u32 rptr = qkx_read_phys_word(QKX_PA_GPU, 0x40000, QKX_GPU_CP_RB_RPTR);
-	u32 wptr = qkx_read_phys_word(QKX_PA_GPU, 0x40000, QKX_GPU_CP_RB_WPTR);
-	u32 status = qkx_read_phys_word(QKX_PA_GPU, 0x40000, QKX_GPU_RBBM_STATUS);
+	u32 rptr, wptr, status;
+	enum qkx_clock_state clk = qkx_clock_domain_state(&platform_bus_type, QKX_DEV_GPU);
+
+	/* A gated GPU clock cannot be issuing any ringbuffer transaction -
+	 * idleness is established without touching a register at all, and
+	 * crucially without risking the SError a gated-peripheral read can
+	 * raise on this SoC (confirmed directly: this is what crashed the
+	 * camera backend on real hardware before this guard existed).
+	 */
+	if (clk == QKX_CLOCK_GATED)
+		return true;
+	if (clk != QKX_CLOCK_ACTIVE)
+		return false; /* unknown - do not claim idle, and do not read */
+
+	rptr = qkx_read_phys_word(QKX_PA_GPU, 0x40000, QKX_GPU_CP_RB_RPTR);
+	wptr = qkx_read_phys_word(QKX_PA_GPU, 0x40000, QKX_GPU_CP_RB_WPTR);
+	status = qkx_read_phys_word(QKX_PA_GPU, 0x40000, QKX_GPU_RBBM_STATUS);
 
 	if (rptr == 0xffffffff || wptr == 0xffffffff || status == 0xffffffff)
 		return false; /* ioremap/read failed - do not claim idle */

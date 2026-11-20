@@ -31,6 +31,21 @@ static bool qkx_rsc_all_tcs_clear(phys_addr_t rsc_pa)
 	int i;
 	bool clear = true;
 
+	/* Deliberately does NOT use the clock-gate guard the other four
+	 * direct-register backends use. Confirmed on real hardware: both
+	 * apps_rsc and disp_rsc report runtime-PM status "unsupported", not
+	 * "active"/"suspended" - because RPMh/AOP is part of the SoC's
+	 * always-on power-management fabric and is architecturally never
+	 * power-collapsed, not because Linux happens not to be watching it.
+	 * Treating "unsupported" as gated (as the guard does for the other
+	 * four, correctly, since there a gated clock is real and
+	 * demonstrated) would make this specific backend never read its
+	 * registers at all - silently neutering the one finding that
+	 * mattered most this session (the stale-TCS-slot race). This is a
+	 * judgment call resting on RPMh/AOP's documented always-on design,
+	 * not on anything independently re-verified this session the way
+	 * the camera gating was.
+	 */
 	base = ioremap(rsc_pa, 0x10000);
 	if (!base)
 		return false;

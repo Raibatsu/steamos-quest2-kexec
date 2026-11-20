@@ -27,7 +27,24 @@
 
 static bool qkx_vfe_top_quiet(void)
 {
-	u32 status = qkx_read_phys(QKX_PA_VFE0, 0x10000, QKX_VFE_IRQ_STATUS0);
+	u32 status;
+	enum qkx_clock_state clk = qkx_clock_domain_state(&platform_bus_type, QKX_DEV_VFE0);
+
+	/* This exact guard exists because of a real crash: reading
+	 * QKX_VFE_IRQ_STATUS0 while this clock was gated raised an
+	 * asynchronous SError on real hardware and panicked the device.
+	 * The camera ISP is commonly power-gated whenever nothing is
+	 * capturing, which is the normal idle case this backend exists to
+	 * detect - so GATED here is not a corner case, it is the expected
+	 * common case, and it is also a definite, confident "idle" answer:
+	 * no clock means no possible bus transaction.
+	 */
+	if (clk == QKX_CLOCK_GATED)
+		return true;
+	if (clk != QKX_CLOCK_ACTIVE)
+		return false;
+
+	status = qkx_read_phys(QKX_PA_VFE0, 0x10000, QKX_VFE_IRQ_STATUS0);
 
 	if (status == 0xffffffff)
 		return false;
