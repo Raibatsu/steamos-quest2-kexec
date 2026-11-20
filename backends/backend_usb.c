@@ -2,20 +2,30 @@
  *
  * USB (dwc3) shutdown-safety backend.
  *
- * REVISED after a sibling backend (UFS) crashed real hardware despite its
- * owning device reporting genuinely runtime-PM active - caused by a
- * link-level autonomous low-power state entirely outside Linux's generic
- * PM model. dwc3 controllers commonly have an equivalent autonomous USB
- * link-power-state mechanism (U1/U2/U3 link states), and this driver
- * exposes no safe software-counter-based sysfs attribute to check instead
- * (checked directly: no DEVICE_ATTR for busy/link-state exists in
- * drivers/usb/dwc3/core.c). Given that, and given the now-demonstrated
- * crash class, this backend does not read DWC3_DSTS or any other raw
- * register at all. A GATED clock is still a confident "halted" answer;
- * ACTIVE is honestly reported as PENDING rather than risking a third
- * crash on real hardware to confirm it.
+ * REVISED twice. First: after a sibling backend (UFS) crashed real
+ * hardware despite its owning device reporting genuinely runtime-PM
+ * active - caused by a link-level autonomous low-power state entirely
+ * outside Linux's generic PM model - this backend stopped reading
+ * DWC3_DSTS or any other raw register, since dwc3/core.c exposes no
+ * safe software-backed attribute either (checked directly).
+ *
+ * Second (this revision): found a different, safer signal. The generic
+ * Linux USB gadget core (drivers/usb/gadget/udc/core.c) exposes
+ * /sys/class/udc/<name>/state (confirmed real on this device at
+ * /sys/class/udc/a600000.dwc3/state) - its state_show() handler does
+ * nothing but sprintf() the cached gadget->state enum, no register
+ * access, not even a lock needed for the read. This is exactly the kind
+ * of link-level, autonomous state the clock-gate check could not see
+ * (the same category of gap that crashed UFS): USB_STATE_SUSPENDED or
+ * USB_STATE_NOTATTACHED here mean the link itself is confirmed not
+ * active, independent of whatever Linux's generic PM thinks. Other
+ * states (e.g. "configured", the normal state while actively connected)
+ * do not confirm an in-flight transfer either way, so they fall through
+ * to the same honest PENDING answer as before - this backend does not
+ * claim more certainty than the signal actually gives.
  */
 #include <linux/errno.h>
+#include <linux/string.h>
 #include "qkx_common.h"
 #include "qkx_ctx.h"
 
@@ -23,13 +33,23 @@
 		      QKX_SHUTDOWN_CAP(QKX_SHUTDOWN_DRAIN) | \
 		      QKX_SHUTDOWN_CAP(QKX_SHUTDOWN_STOP))
 
+#define QKX_UDC_STATE_PATH "/sys/class/udc/a600000.dwc3/state"
+
 static bool qkx_usb_halted(void)
 {
 	enum qkx_clock_state clk = qkx_clock_domain_state(&platform_bus_type, QKX_DEV_USB0);
+	char buf[32];
+	ssize_t n;
 
 	if (clk == QKX_CLOCK_GATED)
 		return true;
-	return false; /* ACTIVE or UNKNOWN: not confirmed, no register read attempted */
+
+	n = qkx_read_sysfs_file(QKX_UDC_STATE_PATH, buf, sizeof(buf));
+	if (n <= 0)
+		return false; /* couldn't read it - not confirmed */
+
+	return strstr(buf, "suspended") != NULL ||
+	       strstr(buf, "not attached") != NULL;
 }
 
 static int usb_inspect(void *context, struct qkx_shutdown_inventory *inv)
