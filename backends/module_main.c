@@ -151,6 +151,108 @@ static void qkx_orchestration_test(void)
 			result.failed.action, result.failed.direction, result.backend_return);
 }
 
+/* The real orchestration run only ever reaches as far as real-world
+ * hardware state allows before the forward phase blocks (camera and
+ * ADSP, 2 of 10 backends, the last time this ran - ADSP was genuinely
+ * busy and correctly stopped the whole sequence there). That leaves 8
+ * backends' rollback_begin/rollback_poll never actually exercised
+ * end-to-end. Rather than wait for a moment where everything happens to
+ * be idle at once, this directly calls every backend's rollback path
+ * with synthetic UNDO and REOPEN keys and independently re-derives the
+ * expected evidence/quiesced_attempt - using the raw constants from
+ * shutdown.h directly, not qkx_evidence_for() from qkx_common.h, so this
+ * is a genuine cross-check rather than testing a function against
+ * itself (qkx_evidence_for already turned out to have one real bug this
+ * session; testing against it again would not have caught a second one
+ * the same way).
+ */
+static bool qkx_check_rollback(const struct qkx_shutdown_backend *backend,
+				const char *name, enum qkx_shutdown_action action,
+				enum qkx_shutdown_direction direction)
+{
+	struct qkx_shutdown_key key = { 0 };
+	struct qkx_shutdown_receipt receipt = { 0 };
+	unsigned int expected_evidence;
+	u64 expected_attempt;
+	int ret;
+
+	key.client = 0xCAFEUL;
+	key.epoch = qkx_epoch;
+	key.transaction = 1;
+	key.attempt = 7; /* deliberately not 0/1, to catch a hardcoded wrong value */
+	key.subsystem = backend->subsystem;
+	key.action = action;
+	key.direction = direction;
+	key.original_attempt = (direction == QKX_SHUTDOWN_FORWARD) ? 0 : 3;
+
+	if (direction == QKX_SHUTDOWN_REOPEN)
+		expected_evidence = QKX_SHUTDOWN_NO_LATE_COMPLETION | QKX_SHUTDOWN_ADMISSION_REOPENED;
+	else if (direction == QKX_SHUTDOWN_UNDO)
+		expected_evidence = QKX_SHUTDOWN_NO_LATE_COMPLETION |
+			(action == QKX_SHUTDOWN_CLOSE ? QKX_SHUTDOWN_ADMISSION_CLOSED : QKX_SHUTDOWN_RESTORED);
+	else
+		expected_evidence = 1U << action;
+	expected_attempt = key.original_attempt;
+
+	ret = backend->rollback_begin(backend->context, &key, &receipt);
+	if (ret) {
+		pr_info("qkx_backends: [%s] rollback(%s, action=%u) call failed: %d\n",
+			name, direction == QKX_SHUTDOWN_UNDO ? "UNDO" : "REOPEN", action, ret);
+		return false;
+	}
+
+	if (receipt.state != QKX_SHUTDOWN_COMPLETE ||
+	    receipt.evidence != expected_evidence ||
+	    receipt.quiesced_attempt != expected_attempt) {
+		pr_info("qkx_backends: [%s] rollback(%s, action=%u) MISMATCH state=%d evidence=0x%x(want 0x%x) attempt=%llu(want %llu)\n",
+			name, direction == QKX_SHUTDOWN_UNDO ? "UNDO" : "REOPEN", action,
+			receipt.state, receipt.evidence, expected_evidence,
+			receipt.quiesced_attempt, expected_attempt);
+		return false;
+	}
+	return true;
+}
+
+static void qkx_rollback_contract_test(void)
+{
+	static const enum qkx_shutdown_action producer_actions[] = {
+		QKX_SHUTDOWN_CLOSE, QKX_SHUTDOWN_DRAIN, QKX_SHUTDOWN_STOP,
+	};
+	int i, j;
+	unsigned int pass = 0, total = 0;
+
+	for (i = 0; i < QKX_SHUTDOWN_SUBSYSTEMS; i++) {
+		const struct qkx_shutdown_backend *b = &qkx_backends[i];
+		enum qkx_shutdown_action release_action =
+			(i == QKX_SHUTDOWN_AOP) ? QKX_SHUTDOWN_RETIRE : QKX_SHUTDOWN_RELEASE;
+		bool is_producer = (i <= QKX_SHUTDOWN_OTHER_DMA);
+
+		if (!b->rollback_begin)
+			continue;
+
+		if (is_producer) {
+			for (j = 0; j < ARRAY_SIZE(producer_actions); j++) {
+				total++;
+				pass += qkx_check_rollback(b, qkx_subsys_names[i],
+					producer_actions[j], QKX_SHUTDOWN_UNDO);
+			}
+			total++;
+			pass += qkx_check_rollback(b, qkx_subsys_names[i],
+				QKX_SHUTDOWN_CLOSE, QKX_SHUTDOWN_REOPEN);
+		} else {
+			total++;
+			pass += qkx_check_rollback(b, qkx_subsys_names[i],
+				release_action, QKX_SHUTDOWN_UNDO);
+			if (i == QKX_SHUTDOWN_AOP) {
+				total++;
+				pass += qkx_check_rollback(b, qkx_subsys_names[i],
+					QKX_SHUTDOWN_CLOSE, QKX_SHUTDOWN_REOPEN);
+			}
+		}
+	}
+	pr_info("qkx_backends: [rollback-contract] %u/%u checks passed\n", pass, total);
+}
+
 static int __init qkx_backends_init(void)
 {
 	int i;
@@ -180,6 +282,7 @@ static int __init qkx_backends_init(void)
 
 	qkx_self_test();
 	qkx_orchestration_test();
+	qkx_rollback_contract_test();
 	return 0;
 }
 
