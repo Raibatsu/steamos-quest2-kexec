@@ -964,3 +964,38 @@ useful information) - but because reaching it safely would require
 genuinely new reverse-engineering work this session doesn't have the
 tools or time to independently verify, unlike every other upgrade
 tonight which did.
+
+## Secure/TZ re-checked directly against Meta's own source - confirmed, not assumed
+
+Went back to Meta's own qseecom.c source specifically to check for
+anything missed, rather than relying on the earlier conclusion alone.
+
+- `qseecom_probe()` only calls `qseecom_init_dev(pdev)` - read its full
+  body directly. It sets `qseecom.dev = &pdev->dev` (the static global
+  storing a pointer TO its device) but never the reverse
+  (`dev_set_drvdata()` is never called anywhere in the file, confirmed
+  by grep across the whole source, not just the probe function). The
+  pointer only flows one direction - global to device, never device to
+  global - so there genuinely is no drvdata path, checked from both
+  directions this time.
+- Checked the real, live device directly: `82400000.qseecom` exists on
+  this headset (confirmed via `/sys/bus/platform/devices/`), but its
+  sysfs directory holds only the generic platform-device attributes
+  every device gets (driver symlink, modalias, power/, uevent) - nothing
+  qseecom-specific exposed.
+- Checked whether a smaller, differently-reachable struct could help
+  instead: `struct qseecom_handle` (the per-app session handle passed to
+  qseecom_start_app/send_command/shutdown_app) is just three fields -
+  `dev`, `sbuf`, `sbuf_len`. Even if some other properly drvdata-attached
+  driver held one as part of its own state, it carries no information
+  about overall TZ app activity (no app count, no list) - this side door
+  wouldn't have told us anything useful even if it existed.
+
+### Conclusion, now source-confirmed rather than inferred
+
+Secure/TZ's pass-through stands, checked thoroughly against Meta's own
+published source from multiple angles (probe function, live device
+sysfs, the handle struct's own shape) - not something to keep digging at
+with tonight's toolkit. The gap is real and specific: no drvdata path
+exists, and no externally-verifiable offset (the kind camera's
+pre-existing prior art provided) exists either.
