@@ -2,20 +2,19 @@
  *
  * Camera (VFE/IFE) shutdown-safety backend.
  *
- * Real evidence: cam_vfe_reset() in cam_vfe_core.c subscribes to the real
- * VFE top-reset IRQ and blocks on wait_for_completion_timeout() for that
- * interrupt - genuine hardware confirmation, reachable via the formally
- * registered hw_mgr_intf->hw_reset operation, not an error-only path.
- *
- * This backend deliberately does NOT call hw_ops.reset() itself or try to
- * trigger that IRQ - doing so from an unrelated module while the real
- * camera driver may still own and be driving this exact hardware would
- * race the real driver's own state machine, which is unsafe. Instead this
- * is a pure, read-only check of the VFE top IRQ status register: if any
- * top-level status bits are currently latched, the hardware is not idle
- * and it is not yet safe to proceed. This is weaker than triggering and
- * confirming a real reset, but it is the only action safe to take from
- * outside the owning driver.
+ * REVISED after a sibling backend (UFS) crashed real hardware despite
+ * reporting genuinely runtime-PM active - caused by an autonomous
+ * link-level low-power state entirely outside Linux's generic PM model.
+ * This module's own earlier guard against the camera's initial crash
+ * (gated -> idle, active -> read a register) rested on the same kind of
+ * "active means safe" assumption that just failed for a different
+ * subsystem. There is no verified reason the VFE's per-block clock
+ * gating can't have an equivalent gap, so this backend no longer reads
+ * QKX_VFE_IRQ_STATUS0 or any other raw register at all, even when
+ * active. A GATED clock is still a confident "idle" answer (no clock, no
+ * possible bus transaction, and the camera ISP's normal idle state);
+ * ACTIVE is honestly reported as PENDING rather than risking a third
+ * crash to confirm it.
  */
 #include <linux/errno.h>
 #include "qkx_common.h"
@@ -27,28 +26,11 @@
 
 static bool qkx_vfe_top_quiet(void)
 {
-	u32 status;
 	enum qkx_clock_state clk = qkx_clock_domain_state(&platform_bus_type, QKX_DEV_VFE0);
 
-	/* This exact guard exists because of a real crash: reading
-	 * QKX_VFE_IRQ_STATUS0 while this clock was gated raised an
-	 * asynchronous SError on real hardware and panicked the device.
-	 * The camera ISP is commonly power-gated whenever nothing is
-	 * capturing, which is the normal idle case this backend exists to
-	 * detect - so GATED here is not a corner case, it is the expected
-	 * common case, and it is also a definite, confident "idle" answer:
-	 * no clock means no possible bus transaction.
-	 */
 	if (clk == QKX_CLOCK_GATED)
 		return true;
-	if (clk != QKX_CLOCK_ACTIVE)
-		return false;
-
-	status = qkx_read_phys(QKX_PA_VFE0, 0x10000, QKX_VFE_IRQ_STATUS0);
-
-	if (status == 0xffffffff)
-		return false;
-	return status == 0;
+	return false; /* ACTIVE or UNKNOWN: not confirmed, no register read attempted */
 }
 
 static int cam_inspect(void *context, struct qkx_shutdown_inventory *inv)

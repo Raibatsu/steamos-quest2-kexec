@@ -2,11 +2,18 @@
  *
  * USB (dwc3) shutdown-safety backend.
  *
- * Real evidence: dwc3_gadget_run_stop() in gadget.c polls the real
- * DWC3_DSTS hardware register's DEVCTRLHLT bit after clearing RUN_STOP,
- * with a comment citing the hardware databook's requirement to stop
- * active transfers first. That function is static; this backend reads
- * the same DSTS register independently, at dwc0's confirmed base address.
+ * REVISED after a sibling backend (UFS) crashed real hardware despite its
+ * owning device reporting genuinely runtime-PM active - caused by a
+ * link-level autonomous low-power state entirely outside Linux's generic
+ * PM model. dwc3 controllers commonly have an equivalent autonomous USB
+ * link-power-state mechanism (U1/U2/U3 link states), and this driver
+ * exposes no safe software-counter-based sysfs attribute to check instead
+ * (checked directly: no DEVICE_ATTR for busy/link-state exists in
+ * drivers/usb/dwc3/core.c). Given that, and given the now-demonstrated
+ * crash class, this backend does not read DWC3_DSTS or any other raw
+ * register at all. A GATED clock is still a confident "halted" answer;
+ * ACTIVE is honestly reported as PENDING rather than risking a third
+ * crash on real hardware to confirm it.
  */
 #include <linux/errno.h>
 #include "qkx_common.h"
@@ -18,23 +25,11 @@
 
 static bool qkx_usb_halted(void)
 {
-	u32 dsts;
 	enum qkx_clock_state clk = qkx_clock_domain_state(&platform_bus_type, QKX_DEV_USB0);
 
-	/* Gated clock means no possible in-flight transfer - confirmed
-	 * halted without reading a register, and without the SError risk a
-	 * gated-peripheral read raised on real hardware this session.
-	 */
 	if (clk == QKX_CLOCK_GATED)
 		return true;
-	if (clk != QKX_CLOCK_ACTIVE)
-		return false;
-
-	dsts = qkx_read_phys(QKX_PA_USB0, 0x100000, QKX_USB_DSTS);
-
-	if (dsts == 0xffffffff)
-		return false;
-	return !!(dsts & QKX_USB_DSTS_DEVCTRLHLT);
+	return false; /* ACTIVE or UNKNOWN: not confirmed, no register read attempted */
 }
 
 static int usb_inspect(void *context, struct qkx_shutdown_inventory *inv)

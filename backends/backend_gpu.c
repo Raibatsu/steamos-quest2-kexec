@@ -2,21 +2,24 @@
  *
  * GPU (Adreno/KGSL) shutdown-safety backend.
  *
- * Real evidence this is built on (confirmed by reading adreno.c this
- * session, not assumed): adreno_isidle() in the real driver checks the
- * ringbuffer's own hardware read/write pointer registers directly, plus a
- * per-generation hw_isidle() status read. adreno_isidle() itself is a
- * static function we cannot call from an external module, so this backend
- * independently re-derives the same hardware fact by reading the real
- * A6XX_CP_RB_RPTR/WPTR and A6XX_RBBM_STATUS registers at their confirmed
- * physical offsets - the same registers the real driver reads, just via
- * our own ioremap rather than calling into adreno.c's internals.
+ * REVISED after two real crashes on real hardware this session (camera's
+ * VFE register read, then UFS's doorbell register read, both raising a
+ * fatal asynchronous SError). The second crash specifically disproved the
+ * assumption behind the first fix: UFS was genuinely runtime-PM "active"
+ * and still faulted, because UFS has its own autonomous link-hibernate
+ * state (auto_hibern8) entirely separate from Linux's generic PM model.
+ * There is no reason to assume Adreno/KGSL lacks an equivalent autonomous
+ * low-power sub-state this module cannot see from outside the driver.
  *
- * Scope: implements CLOSE/DRAIN/STOP as the same real idle check, run at
- * each step the orchestrator requires it. This is honest about what the
- * hardware actually gives us: Adreno doesn't have three independently
- * distinguishable hardware states for these three software-level actions,
- * only "idle" or "not idle".
+ * Given that, this backend no longer performs any raw MMIO register read
+ * at all, even when the clock-gate check reports the device active. It
+ * relies solely on qkx_clock_domain_state(): a GATED result is still a
+ * strong, confident "idle" answer (no clock, no possible transaction).
+ * An ACTIVE result is no longer treated as "safe to go read a register" -
+ * it is honestly reported as PENDING (not confirmed), because confirming
+ * it would require exactly the kind of raw read that has now caused two
+ * real reboots. This trades real hardware-register-strength evidence for
+ * guaranteed safety against a demonstrated, repeating crash class.
  */
 #include <linux/errno.h>
 #include "qkx_common.h"
@@ -28,29 +31,11 @@
 
 static bool qkx_gpu_is_idle(void)
 {
-	u32 rptr, wptr, status;
 	enum qkx_clock_state clk = qkx_clock_domain_state(&platform_bus_type, QKX_DEV_GPU);
 
-	/* A gated GPU clock cannot be issuing any ringbuffer transaction -
-	 * idleness is established without touching a register at all, and
-	 * crucially without risking the SError a gated-peripheral read can
-	 * raise on this SoC (confirmed directly: this is what crashed the
-	 * camera backend on real hardware before this guard existed).
-	 */
 	if (clk == QKX_CLOCK_GATED)
 		return true;
-	if (clk != QKX_CLOCK_ACTIVE)
-		return false; /* unknown - do not claim idle, and do not read */
-
-	rptr = qkx_read_phys_word(QKX_PA_GPU, 0x40000, QKX_GPU_CP_RB_RPTR);
-	wptr = qkx_read_phys_word(QKX_PA_GPU, 0x40000, QKX_GPU_CP_RB_WPTR);
-	status = qkx_read_phys_word(QKX_PA_GPU, 0x40000, QKX_GPU_RBBM_STATUS);
-
-	if (rptr == 0xffffffff || wptr == 0xffffffff || status == 0xffffffff)
-		return false; /* ioremap/read failed - do not claim idle */
-
-	/* Ringbuffer idle (rptr caught up to wptr) and RBBM core not busy. */
-	return (rptr == wptr) && !(status & BIT(0));
+	return false; /* ACTIVE or UNKNOWN: not confirmed, no register read attempted */
 }
 
 static int gpu_inspect(void *context, struct qkx_shutdown_inventory *inv)

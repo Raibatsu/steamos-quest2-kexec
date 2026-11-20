@@ -2,13 +2,20 @@
  *
  * UFS shutdown-safety backend.
  *
- * Real evidence: ufshcd_wait_for_doorbell_clr() in the real ufshcd.c reads
- * REG_UTP_TRANSFER_REQ_DOOR_BELL / REG_UTP_TASK_REQ_DOOR_BELL - real MMIO
- * doorbell registers, not the software outstanding_reqs bitmap. Both are
- * static-linkage internals of ufshcd.c we can't call directly, so this
- * backend re-derives the same fact by reading those same two registers
- * at their real, confirmed offsets from the UFS host controller's own
- * documented register map (matches the offsets ufshcd.c itself uses).
+ * REVISED after this exact backend caused a real crash on real hardware:
+ * reading REG_UTP_TRANSFER_REQ_DOOR_BELL / REG_UTP_TASK_REQ_DOOR_BELL
+ * raised a fatal asynchronous SError even though qkx_clock_domain_state()
+ * reported this device genuinely runtime-PM active. Root cause: UFS has
+ * its own autonomous link-hibernate state (the "auto_hibern8" feature -
+ * confirmed present via this device's own ufs-sysfs attributes), which
+ * operates entirely independently of Linux's generic PM model. Being
+ * "active" in the generic sense does not mean the UniPro link itself
+ * isn't hibernating underneath it.
+ *
+ * This backend no longer reads any raw register. A GATED clock is still
+ * a confident "idle" answer (no clock, no possible transaction); an
+ * ACTIVE result is honestly reported as PENDING rather than risking
+ * another crash to confirm it.
  */
 #include <linux/errno.h>
 #include "qkx_common.h"
@@ -20,24 +27,11 @@
 
 static bool qkx_ufs_doorbells_clear(void)
 {
-	u32 tr, tm;
 	enum qkx_clock_state clk = qkx_clock_domain_state(&platform_bus_type, QKX_DEV_UFS);
 
-	/* Gated clock means no possible outstanding transaction - confirmed
-	 * idle without reading a register, and without the SError risk a
-	 * gated-peripheral read raised on real hardware this session.
-	 */
 	if (clk == QKX_CLOCK_GATED)
 		return true;
-	if (clk != QKX_CLOCK_ACTIVE)
-		return false;
-
-	tr = qkx_read_phys(QKX_PA_UFS, 0x1000, QKX_UFS_UTRLDBR);
-	tm = qkx_read_phys(QKX_PA_UFS, 0x1000, QKX_UFS_UTMRLDBR);
-
-	if (tr == 0xffffffff || tm == 0xffffffff)
-		return false;
-	return tr == 0 && tm == 0;
+	return false; /* ACTIVE or UNKNOWN: not confirmed, no register read attempted */
 }
 
 static int ufs_inspect(void *context, struct qkx_shutdown_inventory *inv)

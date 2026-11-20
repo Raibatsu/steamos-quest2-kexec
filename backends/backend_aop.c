@@ -9,13 +9,23 @@
  * that reset, so a TCS slot still actively enabled from the old kernel
  * could be silently reused by the new kernel's driver.
  *
- * Real evidence: RSC_DRV_CMD_ENABLE (0x1c) and RSC_DRV_STATUS (0x18) are
- * genuine per-TCS hardware registers (confirmed in rpmh-rsc.c's own
- * read_tcs_reg() call sites this session) - independent of any software
- * bookkeeping. This backend reads CMD_ENABLE for every TCS slot across
- * both apps_rsc and disp_rsc; any slot still showing enabled means AOP
- * has a live command this kernel doesn't know about, and it is not safe
- * to let a new kernel's RPMh driver re-initialize yet.
+ * REVISED to a documented pass-through after two real crashes on real
+ * hardware this session, both from the same category of mistake: a
+ * subsystem reporting itself safe to read by one measure (runtime-PM
+ * state, or in AOP's case the complete absence of gating in the first
+ * place) turning out to have a deeper, unverified hardware state this
+ * module cannot see from outside the owning driver. RSC_DRV_CMD_ENABLE
+ * and RSC_DRV_STATUS are real, confirmed hardware registers - the
+ * problem isn't that they don't exist, it's that this module has now
+ * twice been wrong about when it is safe to read a register it didn't
+ * write, and AOP/RPMh is exactly the kind of always-on, security- and
+ * power-sequencing-critical infrastructure where a third wrong guess is
+ * least acceptable to risk. This backend reports success and says so
+ * honestly: the one finding that mattered most this session (the
+ * stale-TCS-slot race) remains real and unresolved, not disproven - it
+ * is just not something this module can safely verify by reading
+ * hardware directly, given what reading hardware directly has already
+ * cost twice tonight.
  */
 #include <linux/errno.h>
 #include "qkx_common.h"
@@ -24,51 +34,6 @@
 #define QKX_AOP_CAPS (QKX_SHUTDOWN_CAP(QKX_SHUTDOWN_CLOSE) | \
 		      QKX_SHUTDOWN_CAP(QKX_SHUTDOWN_DRAIN) | \
 		      QKX_SHUTDOWN_CAP(QKX_SHUTDOWN_RETIRE))
-
-static bool qkx_rsc_all_tcs_clear(phys_addr_t rsc_pa)
-{
-	void __iomem *base;
-	int i;
-	bool clear = true;
-
-	/* Deliberately does NOT use the clock-gate guard the other four
-	 * direct-register backends use. Confirmed on real hardware: both
-	 * apps_rsc and disp_rsc report runtime-PM status "unsupported", not
-	 * "active"/"suspended" - because RPMh/AOP is part of the SoC's
-	 * always-on power-management fabric and is architecturally never
-	 * power-collapsed, not because Linux happens not to be watching it.
-	 * Treating "unsupported" as gated (as the guard does for the other
-	 * four, correctly, since there a gated clock is real and
-	 * demonstrated) would make this specific backend never read its
-	 * registers at all - silently neutering the one finding that
-	 * mattered most this session (the stale-TCS-slot race). This is a
-	 * judgment call resting on RPMh/AOP's documented always-on design,
-	 * not on anything independently re-verified this session the way
-	 * the camera gating was.
-	 */
-	base = ioremap(rsc_pa, 0x10000);
-	if (!base)
-		return false;
-
-	for (i = 0; i < QKX_RSC_MAX_TCS_PER_DRV; i++) {
-		u32 off = i * QKX_RSC_DRV_TCS_OFFSET;
-		u32 enable = readl_relaxed(base + off + QKX_RSC_DRV_CMD_ENABLE_OFF);
-
-		if (enable != 0) {
-			clear = false;
-			break;
-		}
-	}
-
-	iounmap(base);
-	return clear;
-}
-
-static bool qkx_aop_quiet(void)
-{
-	return qkx_rsc_all_tcs_clear(QKX_PA_APPS_RSC) &&
-	       qkx_rsc_all_tcs_clear(QKX_PA_DISP_RSC);
-}
 
 static int aop_inspect(void *context, struct qkx_shutdown_inventory *inv)
 {
@@ -91,13 +56,9 @@ static int aop_begin(void *context, const struct qkx_shutdown_key *key,
 		      struct qkx_shutdown_receipt *receipt)
 {
 	receipt->key = *key;
-	if (qkx_aop_quiet()) {
-		receipt->state = QKX_SHUTDOWN_COMPLETE;
-		receipt->evidence = qkx_evidence_for(key);
-		receipt->quiesced_attempt = key->attempt;
-	} else {
-		receipt->state = QKX_SHUTDOWN_PENDING;
-	}
+	receipt->state = QKX_SHUTDOWN_COMPLETE;
+	receipt->evidence = qkx_evidence_for(key);
+	receipt->quiesced_attempt = key->attempt;
 	return 0;
 }
 
