@@ -1211,3 +1211,21 @@ subsystem_put()-to-zero path, never through the generic device_shutdown()
 walk. This closes the question with certainty rather than inference:
 DSP/ADSP gets zero generic shutdown coverage during a real kexec jump,
 same as the other 7 non-UFS subsystems.
+
+## Confirming the gate is the real, live, operative barrier (not a dormant check)
+
+Checked the second qkx_dma_gate() call site (loader.c:1457, inside the
+ioctl parameter-validation path, separate from the one inside
+qkx_execute() itself at line 1071 - checked twice, defense in depth).
+Noticed a compile-time guard around hardware actions,
+`#ifndef QKX_ENABLE_EXPERIMENTAL_JUMP` (loader.c:1436) returning
+-EOPNOTSUPP for a "staging build" - worth checking whether this flag is
+actually on in the project's real build, since if it were off, the
+runtime gate would be moot (nothing reachable to even test).
+
+module/Makefile:21 sets `ccflags-y += -DQKX_ENABLE_EXPERIMENTAL_JUMP`
+unconditionally - this flag is always on in this project's actual build.
+`execute` is reachable (qkx_execute() at loader.c:1575, same function
+containing qkx_dma_gate() and prepare(NULL)). Confirms the runtime gate
+studied in the last two entries is the real, live, singular, operative
+barrier in this exact build - not a dormant or already-bypassed check.
