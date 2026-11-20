@@ -2,24 +2,33 @@
  *
  * ADSP/CDSP/SLPI shutdown-safety backend.
  *
- * Real evidence: subsys_stop() in subsystem_restart.c does a synchronous,
- * two-way sysmon_send_shutdown() IPC handshake with the remote firmware
- * itself before any hardware-level reset, and only fires AFTER_SHUTDOWN
- * once that and the PIL shutdown() callback both complete.
+ * REVISED after Camera/SyncBoss/Video's success with reading real,
+ * BTF-verified private struct fields instead of relying on the narrow
+ * exported API surface alone. find_subsys_device("adsp") already
+ * legitimately returns a real struct subsys_device* - no drvdata lookup
+ * or offset trick needed, this pointer is exported and intended for
+ * exactly this kind of use.
  *
- * This backend deliberately does NOT call subsystem_get()/subsystem_put()
- * itself: those are real, reference-counted ownership primitives, and
- * forcing a subsystem down while some other driver still legitimately
- * holds its own reference would be wrong, not safe - exactly the
- * multi-owner problem that refcounting exists to prevent. There is no
- * exported, purely-read-only "is this fully idle" query in
- * subsystem_restart.c; subsys_get_crash_status() is the closest real,
- * exported, non-destructive signal available, and is used here
- * honestly as a weaker check than the GPU/UFS/USB/AOP register reads -
- * it confirms this subsystem is not currently crashed/mid-restart, not
- * that no driver anywhere still holds a reference to it.
+ * subsys_get_track() in subsystem_restart.c shows the real state can
+ * live in one of two places: subsys->track directly, or
+ * subsys->restart_order->track if this subsystem is grouped with others
+ * for combined restart. Checked restart_order directly on this device
+ * before trusting subsys->track (logged either way, not assumed NULL).
+ *
+ * subsys->track.state is a real enum subsys_state (SUBSYS_OFFLINING/
+ * OFFLINE/ONLINE - confirmed in subsystem_restart.c, not guessed) - a
+ * materially better signal than crash status alone: ONLINE is this
+ * subsystem's normal, expected operating state while the AP is awake
+ * (ADSP/CDSP/SLPI are almost always loaded and running), so it answers
+ * "not crashed" no better than subsys_get_crash_status() already did.
+ * OFFLINE means the subsystem is not loaded/running at all - a genuinely
+ * stronger, more specific "safe" signal than "not crashed," read under
+ * track.lock (mutex_trylock - busy means inconclusive, never blocks),
+ * offsets resolved from this device's own /sys/kernel/btf/vmlinux.
  */
 #include <linux/errno.h>
+#include <linux/uaccess.h>
+#include <linux/mutex.h>
 #include <soc/qcom/subsystem_restart.h>
 #include "qkx_common.h"
 #include "qkx_ctx.h"
@@ -28,17 +37,61 @@
 		       QKX_SHUTDOWN_CAP(QKX_SHUTDOWN_DRAIN) | \
 		       QKX_SHUTDOWN_CAP(QKX_SHUTDOWN_STOP))
 
+#define QKX_SUBSYS_RESTART_ORDER_OFF	1216
+#define QKX_SUBSYS_TRACK_OFF		176
+#define QKX_TRACK_STATE_OFF		8
+#define QKX_TRACK_LOCK_OFF		16
+#define QKX_SUBSYS_STATE_OFFLINE	1
+
 static bool qkx_adsp_not_crashed(void)
 {
 	struct subsys_device *dev;
 	int crashed;
+	void *restart_order = (void *)1; /* non-NULL default: fail safe */
+	void *track_addr;
+	struct mutex *track_lock;
+	s32 state = -1;
+	bool offline = false;
 
 	dev = find_subsys_device("adsp");
 	if (!dev)
 		return false; /* can't find it: don't claim safety we don't have */
 
 	crashed = subsys_get_crash_status(dev);
-	return crashed == 0;
+	if (crashed)
+		return false;
+
+	if (probe_kernel_read(&restart_order, (char *)dev + QKX_SUBSYS_RESTART_ORDER_OFF,
+			       sizeof(restart_order))) {
+		pr_info("qkx_backends: [adsp/cdsp/slpi] restart_order read failed\n");
+		return crashed == 0; /* fall back to crash-status-only */
+	}
+	if (restart_order) {
+		/* Grouped restart order - the real state lives in
+		 * restart_order->track, a different struct this backend
+		 * hasn't resolved. Documented, not guessed at: fall back
+		 * to crash-status-only rather than read the wrong struct.
+		 */
+		pr_info("qkx_backends: [adsp/cdsp/slpi] grouped restart_order=%p - state check skipped, using crash-status only\n",
+			restart_order);
+		return crashed == 0;
+	}
+
+	track_addr = (char *)dev + QKX_SUBSYS_TRACK_OFF;
+	track_lock = (struct mutex *)((char *)track_addr + QKX_TRACK_LOCK_OFF);
+	if (!mutex_trylock(track_lock))
+		return false; /* busy: inconclusive, not idle */
+
+	if (probe_kernel_read(&state, (char *)track_addr + QKX_TRACK_STATE_OFF, sizeof(state))) {
+		mutex_unlock(track_lock);
+		return false;
+	}
+	mutex_unlock(track_lock);
+
+	offline = (state == QKX_SUBSYS_STATE_OFFLINE);
+	pr_info("qkx_backends: [adsp/cdsp/slpi] subsys_state=%d (0=offlining,1=offline,2=online) crashed=%d\n",
+		state, crashed);
+	return offline;
 }
 
 static int dsp_inspect(void *context, struct qkx_shutdown_inventory *inv)
