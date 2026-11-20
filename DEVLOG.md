@@ -1462,3 +1462,40 @@ problem already fully addressable by the rpmh_flush()-based mitigation
 designed in the previous entry. This is real narrowing of scope via a
 simple, safe, zero-risk device-tree read - not a new mitigation for the
 remaining gap, but a precise statement of exactly how small it now is.
+
+## Turning the active-TCS bound into working code: backend_aop.c now reports it precisely
+
+The previous entry bounded the active-TCS gap to APPS_RSC's 2 dedicated
+banks via a live DT read. Worked out exactly which bits those are in
+tcs_in_use by reading rpmh_probe_tcs_config()'s own offset-assignment
+loop (rpmh-rsc.c:803-823): it walks tcs_cfg[] in DT property order,
+skips entries with num_tcs==0 or type==CONTROL_TCS, and assigns
+tcs->offset as a running total (st) over the remaining types in that
+same order. For APPS_RSC's actual stored order - (ACTIVE_TCS,2),
+(SLEEP_TCS,3), (WAKE_TCS,3), (CONTROL_TCS,1) - this gives ACTIVE_TCS
+offset=0 (bits 0-1), SLEEP_TCS offset=2, WAKE_TCS offset=5,
+CONTROL_TCS untracked. Derived, not guessed, directly from this
+device's own live /proc/device-tree data and the real probe() code.
+
+Extended qkx_aop_log_tcs_bitmap() (backend_aop.c) to accept an
+active_tcs_mask parameter and report whether those specific bits are
+set, alongside the existing raw tcs_in_use log line - no new risk, same
+already-proven-safe ordinary-memory read, just a more precise
+interpretation of data already being read. APPS_RSC passes 0x3;
+DISP_RSC passes 0 (confirmed via the same DT read to have no dedicated
+ACTIVE_TCS bank, so there's nothing to isolate there).
+
+Verified live: clean insmod/rmmod, zero BUG/WARNING/Oops. Real output:
+
+    [aop] 18200000.rsc tcs_in_use=0x0 (this kernel's own view only)
+    [aop] 18200000.rsc active_tcs_busy=0 (mask=0x3 - the one gap
+    rpmh_flush() doesn't cover)
+
+Confirms, with the precision this research built up over several
+entries, that the one specific remaining gap in the AOP/TCS problem -
+APPS_RSC's 2 active-TCS banks - is free right now. Same honest caveat
+as every other reading of tcs_in_use still applies: this is the
+CURRENT kernel's own view, not proof about what a future kernel after
+a jump would see - but it is now the most precisely-targeted piece of
+evidence this research has produced about the single hardest part of
+the original finding.
