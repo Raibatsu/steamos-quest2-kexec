@@ -874,3 +874,57 @@ quick look. Camera has no safe externally-reachable signal beyond the
 clock-gate check already in place, and stays honestly at that tier. GPU
 and USB's wins don't generalize here; this is a real, checked limit, not
 an assumption.
+
+## Checking for prior art - WitherBlitz's own repo has much deeper work
+
+Went looking for whether anyone else has tackled this. Found real,
+substantial prior art inside the same upstream repo this whole kexec
+effort is based on (`Quest-2-Steam-OS-Dual-Boot`), in files not
+previously examined this session:
+
+- **`module/camera_dsp_diag.c`** - a standalone, read-only "advisory
+  snapshot" module, far more sophisticated than tonight's work:
+  - Gates on the exact kernel release string
+  (`4.19.325-cip128-st12-g49638c7a8637`) plus device-tree model/compatible
+  checks before doing anything.
+  - Hash-verifies the actual compiled bytes of a known exported function
+  (`cam_req_mgr_is_open`, hashing its first 68 bytes and comparing
+  against a known-good constant) *before* trusting any pointer-offset
+  math built against private struct layouts - a genuinely rigorous
+  answer to the struct-ABI-mismatch risk flagged earlier tonight for our
+  own `ufshcd_hold()` use.
+  - Reads private kernel structures directly via raw pointer offsets
+  from that verified symbol's address, protected by `probe_kernel_read()`
+  (returns an error instead of crashing on a bad address) and
+  non-blocking `mutex_trylock()` everywhere - never blocks, reports
+  "camera-busy"/"core-busy" and bails gracefully instead.
+  - Walks the real CRM session/link list, workqueue pending/free/task
+  counts, and queue read/write/applied indices - genuine, deep software
+  state, not a register.
+- **`QUEST2_OBJECT_CUSTODY.md`** and siblings describe a much heavier,
+  separate effort: actually patching and recompiling `cam_req_mgr` and
+  FastRPC's own source to add reference-counted custody tracking that
+  doesn't exist upstream, gated behind `CONFIG_QKX_OWNER_GATE`
+  (default off, requires camera/FastRPC built statically in - a
+  fundamentally different strategy than an external observing module).
+
+### The important finding: even this hasn't solved it
+
+Their own `QUEST2_RELEASE_READINESS.md` audit states plainly:
+"**Physical shutdown, DMA quiescence and recovery remain unvalidated.**"
+Stage 2 of their own 9-stage audit lists proving camera/DSP/GPU/USB/UFS/
+AOP DMA completion as an open, unresolved blocker - "No complete
+shutdown has been observed." This is independent confirmation that
+tonight's conclusions (Camera has no safe externally-reachable signal;
+GPU/USB needed real digging to find one at all; AOP's core finding
+remains open) line up with the most advanced known public effort on
+this exact device and kernel, not a sign we were missing something
+obvious.
+
+One technique caveat, not to overclaim: `probe_kernel_read()` guards
+against bad *virtual* addresses (page faults). Tonight's real crashes
+were SError *bus* faults from power-gated *physical* MMIO - a different
+failure mode that primitive likely would not have caught. The
+hash-anchor verification and trylock-everywhere design are the parts
+genuinely worth adapting; probe_kernel_read doesn't directly cover what
+actually crashed this session.
