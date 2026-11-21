@@ -1,0 +1,360 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Meta Quest 2 (hollywood), stage 1: storage, USB device mode, keys and the RAM console.
+ * Display, GPU and the rest stay off, as the bootloader left them.
+ * Supplies, carve-outs and GPIOs from the Quest 2's stock tree (board "Hollywood (DVT)", 0x40 0x11).
+ */
+
+/dts-v1/;
+
+#include <dt-bindings/arm/qcom,ids.h>
+#include <dt-bindings/clock/qcom,dispcc-sm8250.h>
+#include <dt-bindings/phy/phy.h>
+#include <dt-bindings/firmware/qcom,scm.h>
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/regulator/qcom,rpmh-regulator.h>
+#include "sm8250.dtsi"
+#include "pm8150.dtsi"
+#include "sm8250-oculus-hollywood-dtbo-sink.dtsi"
+
+/ {
+	model = "Meta Quest 2 (hollywood)";
+	compatible = "oculus,hollywood", "qcom,sm8250";
+	chassis-type = "embedded";
+
+	/* Meta's board overlay overwrites compatible and model; the kernel restores them from these. */
+	quest2,compatible = "oculus,hollywood", "qcom,sm8250";
+	quest2,model = "Meta Quest 2 (hollywood)";
+
+	/* Base tree chosen by SoC revision; the board itself comes from Meta's dtbo. */
+	qcom,msm-id = <QCOM_ID_SM8250 0x20001>;
+	qcom,board-id = <0 0>;
+
+	chosen {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		/* The bootloader's splash, still scanned out: the kernel console until the display driver runs. */
+		framebuffer@9c000000 {
+			compatible = "simple-framebuffer";
+			reg = <0x0 0x9c000000 0x0 0x1b78000>;
+			width = <1920>;
+			height = <3664>;
+			stride = <7680>;
+			format = "a8r8g8b8";
+		};
+	};
+
+	gpio-keys {
+		compatible = "gpio-keys";
+		pinctrl-names = "default";
+		pinctrl-0 = <&vol_up_n>;
+
+		key-volume-up {
+			label = "volume_up";
+			gpios = <&pm8150_gpios 6 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_VOLUMEUP>;
+			debounce-interval = <15>;
+			linux,can-disable;
+			wakeup-source;
+		};
+	};
+
+	reserved-memory {
+		/* Same place and size as Quest OS's ramoops. */
+		ramoops@9ba00000 {
+			compatible = "ramoops";
+			reg = <0x0 0x9ba00000 0x0 0x90000>;
+			record-size = <0x20000>;
+			console-size = <0x40000>;
+			pmsg-size = <0x20000>;
+			no-map;
+		};
+
+		/* Splash framebuffer, still on screen at kernel start. */
+		cont_splash_region: memory@9c000000 {
+			reg = <0x0 0x9c000000 0x0 0x2300000>;
+			no-map;
+		};
+
+		dfps_data_region: memory@9e300000 {
+			reg = <0x0 0x9e300000 0x0 0x100000>;
+			no-map;
+		};
+	};
+};
+
+&apps_rsc {
+	regulators-0 {
+		compatible = "qcom,pm8150-rpmh-regulators";
+		qcom,pmic-id = "a";
+
+		/* UFS and USB supplies, stock voltages. */
+		vreg_s4a_1p8: smps4 {
+			regulator-name = "vreg_s4a_1p8";
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1920000>;
+		};
+
+		vreg_l2a_3p1: ldo2 {
+			regulator-name = "vreg_l2a_3p1";
+			regulator-min-microvolt = <3072000>;
+			regulator-max-microvolt = <3072000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_l5a_0p88: ldo5 {
+			regulator-name = "vreg_l5a_0p88";
+			regulator-min-microvolt = <880000>;
+			regulator-max-microvolt = <880000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+			/* shared by the UFS and DSI PHYs: a DSI probe error must not switch storage off */
+			regulator-always-on;
+			regulator-boot-on;
+		};
+
+		vreg_l6a_1p2: ldo6 {
+			regulator-name = "vreg_l6a_1p2";
+			regulator-min-microvolt = <1200000>;
+			regulator-max-microvolt = <1200000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_l9a_1p2: ldo9 {
+			regulator-name = "vreg_l9a_1p2";
+			regulator-min-microvolt = <1200000>;
+			regulator-max-microvolt = <1200000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+			/* shared by the UFS and DSI PHYs: a DSI probe error must not switch storage off */
+			regulator-always-on;
+			regulator-boot-on;
+		};
+
+		vreg_l12a_1p8: ldo12 {
+			regulator-name = "vreg_l12a_1p8";
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_l17a_2p5: ldo17 {
+			regulator-name = "vreg_l17a_2p5";
+			regulator-min-microvolt = <2504000>;
+			regulator-max-microvolt = <2952000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_l18a_0p9: ldo18 {
+			regulator-name = "vreg_l18a_0p9";
+			regulator-min-microvolt = <800000>;
+			regulator-max-microvolt = <920000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+	};
+};
+
+&pm8150_gpios {
+	vol_up_n: vol-up-n-state {
+		pins = "gpio6";
+		function = "normal";
+		power-source = <1>;
+		input-enable;
+		bias-pull-up;
+	};
+};
+
+&pon {
+	mode-bootloader = <0x2>;
+	mode-recovery = <0x1>;
+};
+
+&pon_pwrkey {
+	status = "okay";
+};
+
+&pon_resin {
+	linux,code = <KEY_VOLUMEDOWN>;
+	status = "okay";
+};
+
+/* PS_HOLD reset, as Quest OS does it. */
+&{/soc@0} {
+	restart@c264000 {
+		compatible = "qcom,pshold";
+		reg = <0x0 0x0c264000 0x0 0x4>;
+	};
+};
+
+&tlmm {
+	/* GPIOs unused by Quest OS, plus the usual secure lines 28-31 and 40-43. */
+	gpio-reserved-ranges = <28 4>, <40 4>, <68 7>, <76 1>, <78 1>, <82 6>, <90 1>, <92 2>,
+			       <109 1>, <112 1>, <114 1>, <149 31>;
+};
+
+&ufs_mem_hc {
+	status = "okay";
+
+	/* UFS 2.1 storage, gear 3 at most (as Quest OS runs it): the PHY gets its gear-3 tables. */
+	limit-hs-gear = <3>;
+
+	/* The storage chip's reset line (the SoC's UFS_RESET pin), pulsed before the link starts. */
+	reset-gpios = <&tlmm 180 GPIO_ACTIVE_LOW>;
+
+	vcc-supply = <&vreg_l17a_2p5>;
+	vcc-max-microamp = <800000>;
+	vccq-supply = <&vreg_l6a_1p2>;
+	vccq-max-microamp = <800000>;
+	vccq2-supply = <&vreg_s4a_1p8>;
+	vccq2-max-microamp = <800000>;
+};
+
+&ufs_mem_phy {
+	/* UFS 2.1 storage: Quest OS's PHY settings for gear 3 (upstream's are for UFS 3.x) */
+	compatible = "oculus,hollywood-qmp-ufs-phy";
+	status = "okay";
+
+	vdda-phy-supply = <&vreg_l5a_0p88>;
+	vdda-pll-supply = <&vreg_l9a_1p2>;
+};
+
+/* The PHYs' shared reference voltage stays on, as the bootloader left it. */
+&refgen {
+	regulator-always-on;
+	regulator-boot-on;
+};
+
+&usb_1 {
+	status = "okay";
+};
+
+/* Stage 1: USB device mode, network to the PC. */
+&usb_1_dwc3 {
+	dr_mode = "peripheral";
+};
+
+&usb_1_hsphy {
+	status = "okay";
+
+	vdda-pll-supply = <&vreg_l5a_0p88>;
+	vdda18-supply = <&vreg_l12a_1p8>;
+	vdda33-supply = <&vreg_l2a_3p1>;
+};
+
+&usb_1_qmpphy {
+	status = "okay";
+
+	vdda-phy-supply = <&vreg_l9a_1p2>;
+	vdda-pll-supply = <&vreg_l18a_0p9>;
+};
+
+/* The JDI LCD: both eyes on one panel, two bonded DSI links with DSC. */
+&mdss {
+	status = "okay";
+};
+
+&mdss_dsi0 {
+	vdda-supply = <&vreg_l9a_1p2>;
+	qcom,dual-dsi-mode;
+	qcom,master-dsi;
+	status = "okay";
+
+	panel@0 {
+		compatible = "oculus,hollywood-jdi";
+		reg = <0>;
+
+		enable-gpios = <&tlmm 135 GPIO_ACTIVE_HIGH>;
+		reset-gpios = <&tlmm 6 GPIO_ACTIVE_LOW>;
+
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			port@0 {
+				reg = <0>;
+				panel_in0: endpoint {
+					remote-endpoint = <&mdss_dsi0_out>;
+				};
+			};
+
+			port@1 {
+				reg = <1>;
+				panel_in1: endpoint {
+					remote-endpoint = <&mdss_dsi1_out>;
+				};
+			};
+		};
+	};
+};
+
+&mdss_dsi0_out {
+	remote-endpoint = <&panel_in0>;
+	data-lanes = <0 1 2 3>;
+};
+
+&mdss_dsi0_phy {
+	vdds-supply = <&vreg_l5a_0p88>;
+	status = "okay";
+};
+
+&mdss_dsi1 {
+	vdda-supply = <&vreg_l9a_1p2>;
+	qcom,dual-dsi-mode;
+	assigned-clocks = <&dispcc DISP_CC_MDSS_BYTE1_CLK_SRC>, <&dispcc DISP_CC_MDSS_PCLK1_CLK_SRC>;
+	assigned-clock-parents = <&mdss_dsi0_phy DSI_BYTE_PLL_CLK>, <&mdss_dsi0_phy DSI_PIXEL_PLL_CLK>;
+	status = "okay";
+};
+
+&mdss_dsi1_out {
+	remote-endpoint = <&panel_in1>;
+	data-lanes = <0 1 2 3>;
+};
+
+&mdss_dsi1_phy {
+	vdds-supply = <&vreg_l5a_0p88>;
+	status = "okay";
+};
+
+/* Adreno 650, at most 587 MHz. Memory bandwidth per speed from Quest OS's GPU bus table (ddr7 levels 11/9/7/3). */
+&gpu {
+	interconnects = <&gem_noc MASTER_GRAPHICS_3D 0 &mc_virt SLAVE_EBI_CH0 0>;
+	interconnect-names = "gfx-mem";
+	status = "okay";
+};
+
+&gmu {
+	status = "okay";
+};
+
+&gpu_opp_table {
+	/delete-node/ opp-670000000;
+
+	opp-587000000 {
+		opp-peak-kBps = <8171875>;
+	};
+
+	opp-525000000 {
+		opp-peak-kBps = <6074218>;
+	};
+
+	opp-490000000 {
+		opp-peak-kBps = <6074218>;
+	};
+
+	opp-441600000 {
+		opp-peak-kBps = <6074218>;
+	};
+
+	opp-400000000 {
+		opp-peak-kBps = <3972656>;
+	};
+
+	opp-305000000 {
+		opp-peak-kBps = <1761718>;
+	};
+};
+
+/* This headset's signed zap shader, from its modem partition. */
+&gpu_zap_shader {
+	firmware-name = "qcom/sm8250/hollywood/a650_zap.mdt";
+};

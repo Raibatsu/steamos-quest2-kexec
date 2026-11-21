@@ -1,0 +1,109 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Meta Quest 2 (hollywood) kexec target over sm8250-oculus-hollywood.dts.
+ * - Populates /memory@80000000 with Horizon OS's exact 6 GiB banks (ABL bypassed).
+ * - Marks Horizon OS's active TZ/HYP-protected regions no-map across kexec.
+ * - Matches Horizon OS's ramoops console-size (0x20000) so Horizon /sys/fs/pstore
+ *   can read Linux 7.2 logs after a warm reboot/panic.
+ * - Supplies kexec bootargs (panic=5 for automatic pstore-preserving warm reboot).
+ */
+
+#include "sm8250-oculus-hollywood.dts"
+
+/ {
+	memory@80000000 {
+		device_type = "memory";
+		reg = <0x0 0x80000000 0x0 0x3cc00000>,
+		      <0x0 0xc0000000 0x1 0x40000000>;
+	};
+
+	chosen {
+		bootargs = "rdinit=/init clk_ignore_unused pd_ignore_unused regulator_ignore_unused panic=5 loglevel=7 printk.devkmsg=on console=tty0 fbcon=font:TER16x32 fbcon=rotate:3 drm_client_lib.active=fbdev";
+	};
+
+	reserved-memory {
+		ramoops@9ba00000 {
+			console-size = <0x20000>;
+		};
+
+		res_xbl_uefi_log_region@80880000 {
+			reg = <0x0 0x80880000 0x0 0x14000>;
+			no-map;
+		};
+
+		qseecom_ta_region@f8400000 {
+			reg = <0x0 0xf8400000 0x0 0x1000000>;
+			no-map;
+		};
+
+		sp_region@fa800000 {
+			reg = <0x0 0xfa800000 0x0 0x1000000>;
+			no-map;
+		};
+
+		qseecom_region@fc800000 {
+			reg = <0x0 0xfc800000 0x0 0x1400000>;
+			no-map;
+		};
+
+		mailbox_region@ffc00000 {
+			reg = <0x0 0xffc00000 0x0 0x20000>;
+			no-map;
+		};
+	};
+};
+
+&apps_rsc {
+	regulators-0 {
+		vreg_l14a_1p8: ldo14 {
+			regulator-name = "vreg_l14a_1p8";
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1880000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+	};
+
+	regulators-1 {
+		compatible = "qcom,pm8150l-rpmh-regulators";
+		qcom,pmic-id = "c";
+
+		vreg_l11c_3p3: ldo11 {
+			regulator-name = "vreg_l11c_3p3";
+			regulator-min-microvolt = <3296000>;
+			regulator-max-microvolt = <3312000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+	};
+};
+
+&spmi_bus {
+	pmic@4 {
+		compatible = "qcom,pm8150l", "qcom,spmi-pmic";
+		reg = <0x4 SPMI_USID>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+	};
+
+	pmic@5 {
+		compatible = "qcom,pm8150l", "qcom,spmi-pmic";
+		reg = <0x5 SPMI_USID>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		pm8150l_lcdb: lcdb@ec00 {
+			compatible = "qcom,pm8150l-lcdb";
+			reg = <0xec00>;
+			regulator-name = "pm8150l_lcdb";
+			regulator-min-microvolt = <5700000>;
+			regulator-max-microvolt = <5700000>;
+		};
+	};
+};
+
+&mdss_dsi0 {
+	panel@0 {
+		vddio-supply = <&vreg_l14a_1p8>;
+		lcdb-supply = <&pm8150l_lcdb>;
+		blu-mcu-supply = <&vreg_l11c_3p3>;
+	};
+};
