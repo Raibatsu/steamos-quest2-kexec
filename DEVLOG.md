@@ -2095,3 +2095,27 @@ Bootargs:
   - With `req->num_clients = 1` in `drivers/net/wireless/cnss2/qmi.c:205` and `/tmp/qrtr-ns` running before `insmod /tmp/wlan.ko`, `cnss2` and `wlan.ko` completed QMI WLFW handshake (`wma_wait_for_ready_event: FW ready event received`), registered `phy0`, and created `wlan0`, `p2p0`, `p2p1`, and `wifi-aware0`.
   - `ip link set wlan0 up` succeeded (`rc=0`).
   - Built and ran static ARM64 `/tmp/nl80211_scan` (`NL80211_CMD_TRIGGER_SCAN` + `NL80211_CMD_GET_SCAN` on `wlan0` `ifindex=10`): **discovered 12 live Wi-Fi access points (BSSs) over the air (`8496 bytes`, `rc=0`)**.
+
+## Jump #19 Root-Cause Analysis & Jump #20/21 Fixes (`subsys-pil-tz` QTEE SHM Bridge + GPU RSC Sleep State Across Kexec, 2026-11-21)
+
+- **Kexec Jump #19 (`payload_base=0x130000000`)**:
+  - Booted `4.19.325-cip128-st12+ #9 SMP PREEMPT` cleanly to `10.42.0.2:23`.
+- **Root Cause 1 — Why `subsys-pil-tz` (`PAS_INIT_IMAGE_CMD`) Returned `rc=-22` for `adsp` (`pas_id=1`) and `a650_zap` (`pas_id=13`)**:
+  - `dmesg` on Jump #19 revealed:
+    ```
+    [ 0.003809] shmbridge is enabled
+    [ 66.915809] scm_call failed: func id 0x42000201, ret: -3145738, syscall returns: 0x0, 0x0, 0x0
+    [ 66.915817] qkx-pil: PAS_INIT_IMAGE pas_id=1 mdata_phys=0x00000000fccbc000 size=8220 ret=-22 scm_ret=0
+    ```
+  - `ret = -3145738` (`-0x30000A`) is **`AC_ERR_SHM_BRIDGE_NOT_FOUND`** from QTEE TrustZone (`scm_remap_error()` maps it to `-EINVAL` = `-22`).
+  - Because `CONFIG_QTEE_SHM_BRIDGE=y` is enabled, QTEE TZ rejects any `SCM_RW` buffer passed to `PAS_INIT_IMAGE_CMD` that is not allocated from a registered QTEE SHM bridge.
+  - **Fix applied in `drivers/soc/qcom/subsys-pil-tz.c`**: Replaced `dma_alloc_attrs()` in `pil_init_image_trusted()` with `qtee_shmbridge_allocate_shm(size, &shm)` / `qtee_shmbridge_free_shm(&shm)` (matching `drivers/soc/qcom/remoteqdss.c`).
+- **Root Cause 2 — Why `open("/dev/kgsl-3d0")` Timed Out in `GmuPwrGxBwVote` (Line 184)**:
+  - Captured `/sys/class/kgsl/kgsl-3d0/snapshot/dump` (`403,968` bytes) to `private-captures/gmu_snapshot.bin` and disassembled `a650_gmu.bin`:
+    1. In `gmu_snapshot.bin`, `A6XX_GMU_RSCC_CONTROL_ACK` (`0x23b08`) was `0x1` (sleep ACK), `A6XX_GPU_RSCC_RSC_STATUS0_DRV0` (`0x38004`) was `0x01010006` (`BIT(16)` = RSC in sleep state), and `A6XX_RSCC_SEQ_BUSY_DRV0` (`0x38101`) was `0x1`. Meanwhile, GPU RSC AMC `TCS 8` (`0x440e2214`) and `TCS 1` (`0x440e0fb4`) had 4 commands stuck at `CMD_STATUS = 0x00000101` (`CMD_STATUS_ISSUED` set, `CMD_STATUS_COMPL = BIT(16)` zero).
+    2. Because Horizon OS puts the Adreno 650 into SLUMBER (`a6xx_rpmh_power_off_gpu()`) before kexec, the GPU RSC and PDC hardware sequencers remain parked in their sleep state across kexec, gating off GPU RSC active AMC arbitration to RPMh. When the new kexec kernel booted with `device->gmu_core.flags = 0` (`GMU_BOOT_INIT_DONE = 0`, `GMU_RSCC_SLEEP_SEQ_DONE = 0`), `a6xx_gmu_fw_start()` on `GMU_COLD_BOOT` only called `_load_gmu_rpmh_ucode()` and skipped `a6xx_rpmh_power_on_gpu()`.
+    3. Additionally, `tcs_cmd_query_list_gen()` in `drivers/soc/qcom/msm_bus/msm_bus_fabric_rpmh.c:415` omitted `cmdlist_active[k].wait = true;` on the last BCM in a VCD, and `build_rpmh_bw_votes()` in `drivers/gpu/msm/kgsl_gmu.c:795` used `BIT(i)` instead of `BIT(j)`, leaving `ddr_wait_bitmask = 0` and `cnoc_wait_bitmask = 0`.
+  - **Fixes applied**:
+    - `drivers/gpu/msm/adreno_a6xx_gmu.c`: On `GMU_COLD_BOOT`, detect if `A6XX_GPU_RSCC_RSC_STATUS0_DRV0 & BIT(16)` or `A6XX_RSCC_SEQ_BUSY_DRV0 != 0` in hardware, and if so, set `GMU_RSCC_SLEEP_SEQ_DONE` and call `a6xx_rpmh_power_on_gpu(device)` to wake the RSC/PDC sequencer before reloading RSC/PDC uCode.
+    - `drivers/soc/qcom/msm_bus/msm_bus_fabric_rpmh.c` & `drivers/gpu/msm/kgsl_gmu.c`: Fixed `cmdlist_active[k].wait = true` and `BIT(j)` in `build_rpmh_bw_votes()`.
+  - Rebuilt `target-out/arch/arm64/boot/Image` (`#10`) and saved the complete patch set to `patches/target-kernel-stage5.diff`.
