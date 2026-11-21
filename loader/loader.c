@@ -1613,11 +1613,6 @@ static int __init qkx_init(void)
 		ret = -ERANGE;
 		goto out;
 	}
-	owned = vzalloc(QKX_MAX_PAGES * sizeof(*owned));
-	if (!owned) {
-		ret = -ENOMEM;
-		goto out;
-	}
 	pos = 0;
 	ret = qkx_read(df, dh, sizeof(dh), &pos);
 	if (ret)
@@ -1625,6 +1620,20 @@ static int __init qkx_init(void)
 	ret = -EINVAL;
 	if (get_unaligned_be32(dh) != 0xd00dfeed || get_unaligned_be32(dh + 4) != dsize)
 		goto out;
+	/* Claim destination RAM before allocating unmovable vzalloc buffers (owned/dbuf),
+	 * otherwise vzalloc() can place unmovable pages inside [destination_lo, destination_hi)
+	 * and cause alloc_contig_range() to fail with -EBUSY (-16).
+	 */
+	if (execute && !preflight_only) {
+		ret = qkx_claim_destination();
+		if (ret)
+			goto out;
+	}
+	owned = vzalloc(QKX_MAX_PAGES * sizeof(*owned));
+	if (!owned) {
+		ret = -ENOMEM;
+		goto out;
+	}
 	if (payload_base) {
 		dbuf = vzalloc(dsize);
 		if (!dbuf) { ret = -ENOMEM; goto out; }
@@ -1632,12 +1641,6 @@ static int __init qkx_init(void)
 		ret = qkx_read(df, dbuf, dsize, &pos);
 		if (!ret) ret = qkx_check_dtb(dbuf, dsize, rsize);
 		if (ret) goto out;
-	}
-	/* Rehearsals use owned scratch pages and never copy to the fixed window. */
-	if (execute && !preflight_only) {
-		ret = qkx_claim_destination();
-		if (ret)
-			goto out;
 	}
 	ret = qkx_stage(kf, payload_entry, ksize, PAGE_ALIGN(image_size), NULL);
 	if (!ret)

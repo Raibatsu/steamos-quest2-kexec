@@ -18,7 +18,7 @@
 	};
 
 	chosen {
-		bootargs = "rdinit=/init clk_ignore_unused pd_ignore_unused regulator_ignore_unused panic=5 loglevel=7 printk.devkmsg=on console=tty0 fbcon=font:TER16x32 fbcon=rotate:3 drm_client_lib.active=fbdev";
+		bootargs = "rdinit=/init clk_ignore_unused pd_ignore_unused regulator_ignore_unused panic=5 reboot=w irqchip.gicv3_pseudo_nmi=1 nmi_watchdog=panic loglevel=7 printk.devkmsg=on console=tty0 fbcon=font:TER16x32 fbcon=rotate:3 drm_client_lib.active=fbdev";
 	};
 
 	reserved-memory {
@@ -67,6 +67,20 @@
 		compatible = "qcom,pm8150l-rpmh-regulators";
 		qcom,pmic-id = "c";
 
+		vreg_l7c_3p0: ldo7 {
+			regulator-name = "vreg_l7c_3p0";
+			regulator-min-microvolt = <3000000>;
+			regulator-max-microvolt = <3000000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_l8c_1p8: ldo8 {
+			regulator-name = "vreg_l8c_1p8";
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
 		vreg_l11c_3p3: ldo11 {
 			regulator-name = "vreg_l11c_3p3";
 			regulator-min-microvolt = <3296000>;
@@ -105,5 +119,68 @@
 		vddio-supply = <&vreg_l14a_1p8>;
 		lcdb-supply = <&pm8150l_lcdb>;
 		blu-mcu-supply = <&vreg_l11c_3p3>;
+	};
+};
+
+&tlmm {
+	syncboss_pins: syncboss-default-state {
+		reset-pins {
+			pins = "gpio5";
+			function = "gpio";
+			drive-strength = <6>;
+			output-low;
+		};
+
+		wakeup-pins {
+			pins = "gpio4";
+			function = "gpio";
+			bias-pull-down;
+			input-enable;
+		};
+
+		timesync-pins {
+			pins = "gpio7";
+			function = "gpio";
+			bias-pull-down;
+			input-enable;
+		};
+	};
+};
+
+&gpi_dma2 {
+	status = "okay";
+};
+
+&qupv3_id_2 {
+	status = "okay";
+};
+
+&spi19 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&qup_spi19_data_clk &qup_spi19_cs>;
+	status = "okay";
+
+	syncboss@0 {
+		compatible = "oculus,syncboss";
+		reg = <0>;
+		spi-max-frequency = <8000000>;
+		spi-cpol;
+		spi-cpha;
+		pinctrl-names = "default";
+		pinctrl-0 = <&syncboss_pins>;
+
+		reset-gpios = <&tlmm 5 GPIO_ACTIVE_HIGH>;
+		ready-gpios = <&tlmm 4 GPIO_ACTIVE_HIGH>;
+		timesync-gpios = <&tlmm 7 GPIO_ACTIVE_HIGH>;
+		nsync-gpios = <&tlmm 66 GPIO_ACTIVE_HIGH>;
+
+		oculus,mcu-core-supply = <&vreg_s4a_1p8>;
+		oculus,mcu-core-voltage-level = <1800000 1800000>;
+		oculus,imu-core-supply = <&vreg_l7c_3p0>;
+		oculus,imu-core-voltage-level = <3000000 3000000>;
+		oculus,mag-core-supply = <&vreg_l8c_1p8>;
+		oculus,mag-core-voltage-level = <1800000 1800000>;
+
+		oculus,syncboss-has-prox;
 	};
 };

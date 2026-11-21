@@ -1,0 +1,694 @@
+diff --git a/arch/arm64/boot/dts/qcom/Makefile b/arch/arm64/boot/dts/qcom/Makefile
+index 5361978d1..e608dff56 100644
+--- a/arch/arm64/boot/dts/qcom/Makefile
++++ b/arch/arm64/boot/dts/qcom/Makefile
+@@ -484,3 +484,5 @@ x1p42100-lenovo-thinkbook-16-el2-dtbs	:= x1p42100-lenovo-thinkbook-16.dtb x1-el2
+ dtb-$(CONFIG_ARCH_QCOM)	+= x1p42100-lenovo-thinkbook-16.dtb x1p42100-lenovo-thinkbook-16-el2.dtb
+ x1p64100-microsoft-denali-el2-dtbs	:= x1p64100-microsoft-denali.dtb x1-el2.dtbo
+ dtb-$(CONFIG_ARCH_QCOM)	+= x1p64100-microsoft-denali.dtb x1p64100-microsoft-denali-el2.dtb
++dtb-$(CONFIG_ARCH_QCOM) += sm8250-oculus-hollywood.dtb
++dtb-$(CONFIG_ARCH_QCOM) += sm8250-oculus-hollywood-kexec.dtb
+diff --git a/drivers/firmware/psci/psci.c b/drivers/firmware/psci/psci.c
+index 3bb0c6d4c..2d199070b 100644
+--- a/drivers/firmware/psci/psci.c
++++ b/drivers/firmware/psci/psci.c
+@@ -316,20 +316,22 @@ static int get_set_conduit_method(const struct device_node *np)
+ static int psci_sys_reset(struct notifier_block *nb, unsigned long action,
+ 			  void *data)
+ {
+-	if ((reboot_mode == REBOOT_WARM || reboot_mode == REBOOT_SOFT) &&
+-	    psci_system_reset2_supported) {
+-		/*
+-		 * reset_type[31] = 0 (architectural)
+-		 * reset_type[30:0] = 0 (SYSTEM_WARM_RESET)
+-		 * cookie = 0 (ignored by the implementation)
+-		 */
+-		int ret = invoke_psci_fn(PSCI_FN_NATIVE(1_1, SYSTEM_RESET2), 0, 0, 0);
+-
+-		pr_emerg("warm reset refused: %d\n", ret);
+-	} else {
+-		invoke_psci_fn(PSCI_0_2_FN_SYSTEM_RESET, 0, 0, 0);
++	if (reboot_mode == REBOOT_WARM || reboot_mode == REBOOT_SOFT) {
++		if (psci_system_reset2_supported) {
++			/*
++			 * reset_type[31] = 0 (architectural)
++			 * reset_type[30:0] = 0 (SYSTEM_WARM_RESET)
++			 * cookie = 0 (ignored by the implementation)
++			 */
++			int ret = invoke_psci_fn(PSCI_FN_NATIVE(1_1, SYSTEM_RESET2), 0, 0, 0);
++
++			pr_emerg("warm reset refused: %d\n", ret);
++		}
++		return NOTIFY_DONE;
+ 	}
+ 
++	invoke_psci_fn(PSCI_0_2_FN_SYSTEM_RESET, 0, 0, 0);
++
+ 	return NOTIFY_DONE;
+ }
+ 
+diff --git a/drivers/gpu/drm/drm_fb_helper.c b/drivers/gpu/drm/drm_fb_helper.c
+index 1a8cf92d1..bf75b1103 100644
+--- a/drivers/gpu/drm/drm_fb_helper.c
++++ b/drivers/gpu/drm/drm_fb_helper.c
+@@ -1905,6 +1905,6 @@ void drm_fb_helper_lastclose(struct drm_device *dev)
+ 	if (drm_has_active_plane(dev))
+ 		return;
+ 
+-	drm_fb_helper_restore_fbdev_mode_unlocked(dev->fb_helper);
++	drm_fb_helper_restore_fbdev_mode_unlocked(dev->fb_helper, false);
+ }
+ EXPORT_SYMBOL(drm_fb_helper_lastclose);
+diff --git a/drivers/gpu/drm/msm/adreno/a6xx_catalog.c b/drivers/gpu/drm/msm/adreno/a6xx_catalog.c
+index 8390e2e51..fcf57d25b 100644
+--- a/drivers/gpu/drm/msm/adreno/a6xx_catalog.c
++++ b/drivers/gpu/drm/msm/adreno/a6xx_catalog.c
+@@ -1080,8 +1080,7 @@ static const struct adreno_info a6xx_gpus[] = {
+ 		.gmem = SZ_1M + SZ_128K,
+ 		.inactive_period = DRM_MSM_INACTIVE_PERIOD,
+ 		.quirks = ADRENO_QUIRK_HAS_CACHED_COHERENT |
+-			ADRENO_QUIRK_HAS_HW_APRIV |
+-			ADRENO_QUIRK_PREEMPTION,
++			ADRENO_QUIRK_HAS_HW_APRIV,
+ 		.funcs = &a6xx_gpu_funcs,
+ 		.zapfw = "a650_zap.mdt",
+ 		.a6xx = &(const struct a6xx_info) {
+diff --git a/drivers/gpu/drm/msm/adreno/a6xx_gmu.c b/drivers/gpu/drm/msm/adreno/a6xx_gmu.c
+index 7b91d631d..4c7a30dca 100644
+--- a/drivers/gpu/drm/msm/adreno/a6xx_gmu.c
++++ b/drivers/gpu/drm/msm/adreno/a6xx_gmu.c
+@@ -606,8 +606,19 @@ static int a6xx_rpmh_start(struct a6xx_gmu *gmu)
+ 	int ret;
+ 	u32 val;
+ 
+-	if (!test_and_clear_bit(GMU_STATUS_PDC_SLEEP, &gmu->status))
+-		return 0;
++	if (!test_and_clear_bit(GMU_STATUS_PDC_SLEEP, &gmu->status)) {
++		/*
++		 * Across kexec from Horizon OS, the GPU RSC/PDC sequencer may
++		 * still be parked in sleep (RSC_STATUS0 BIT(16) or SEQ_BUSY != 0)
++		 * even though GMU_STATUS_PDC_SLEEP starts clear. Wake it before
++		 * loading and starting the GMU firmware.
++		 */
++		if (!gmu->rscc ||
++		    !((gmu_read_rscc(gmu, REG_A6XX_GPU_RSCC_RSC_STATUS0_DRV0) & BIT(16)) ||
++		      gmu_read_rscc(gmu, REG_A6XX_RSCC_SEQ_BUSY_DRV0)))
++			return 0;
++		DRM_DEV_INFO(gmu->dev, "Waking GPU RSC parked in sleep across kexec\n");
++	}
+ 
+ 	gmu_write(gmu, REG_A6XX_GMU_RSCC_CONTROL_REQ, BIT(1));
+ 
+diff --git a/drivers/gpu/drm/msm/adreno/a6xx_preempt.c b/drivers/gpu/drm/msm/adreno/a6xx_preempt.c
+index 1cf10e575..1c829cd1d 100644
+--- a/drivers/gpu/drm/msm/adreno/a6xx_preempt.c
++++ b/drivers/gpu/drm/msm/adreno/a6xx_preempt.c
+@@ -381,8 +381,11 @@ void a6xx_preempt_init(struct msm_gpu *gpu)
+ 			goto fail;
+ 	}
+ 
+-	/* TODO: make this configurable? */
+-	a6xx_gpu->preempt_level = 1;
++	/*
++	 * Adreno 650 (a6xx) hangs mid-frame at draw-call level (preempt_level = 1);
++	 * use ring-boundary preemption (preempt_level = 0) on a6xx and level 1 on a7xx+.
++	 */
++	a6xx_gpu->preempt_level = adreno_is_a7xx(adreno_gpu) ? 1 : 0;
+ 	a6xx_gpu->uses_gmem = 1;
+ 	a6xx_gpu->skip_save_restore = 1;
+ 
+diff --git a/drivers/gpu/drm/msm/adreno/adreno_device.c b/drivers/gpu/drm/msm/adreno/adreno_device.c
+index f92ef1a94..f179836af 100644
+--- a/drivers/gpu/drm/msm/adreno/adreno_device.c
++++ b/drivers/gpu/drm/msm/adreno/adreno_device.c
+@@ -6,6 +6,7 @@
+  * Copyright (c) 2014,2017 The Linux Foundation. All rights reserved.
+  */
+ 
++#include <linux/firmware/qcom/qcom_scm.h>
+ #include "adreno_gpu.h"
+ 
+ bool hang_debug = false;
+@@ -295,6 +296,8 @@ static void adreno_remove(struct platform_device *pdev)
+ static void adreno_shutdown(struct platform_device *pdev)
+ {
+ 	WARN_ON_ONCE(adreno_system_suspend(&pdev->dev));
++	if (qcom_scm_is_available())
++		qcom_scm_pas_shutdown(13);
+ }
+ 
+ static const struct of_device_id dt_match[] = {
+diff --git a/drivers/gpu/drm/panel/Kconfig b/drivers/gpu/drm/panel/Kconfig
+index 3f37b245a..3e2a8bf53 100644
+--- a/drivers/gpu/drm/panel/Kconfig
++++ b/drivers/gpu/drm/panel/Kconfig
+@@ -1403,3 +1403,11 @@ config DRM_PANEL_XINPENG_XPP055C272
+ 	  XPP055C272 controller for 720x1280 LCD panels with MIPI/RGB/SPI
+ 	  system interfaces.
+ endmenu
++
++config DRM_PANEL_OCULUS_HOLLYWOOD_JDI
++	tristate "Meta Quest 2 JDI LCD"
++	depends on OF && DRM && DRM_PANEL && DRM_MIPI_DSI
++	select DRM_DISPLAY_DSC_HELPER
++	select DRM_DISPLAY_HELPER
++	help
++	  The Meta Quest 2's JDI LCD on two bonded DSI links with DSC.
+diff --git a/drivers/gpu/drm/panel/Makefile b/drivers/gpu/drm/panel/Makefile
+index 4e5cb6175..f514cd0e3 100644
+--- a/drivers/gpu/drm/panel/Makefile
++++ b/drivers/gpu/drm/panel/Makefile
+@@ -136,3 +136,4 @@ obj-$(CONFIG_DRM_PANEL_VISIONOX_R66451) += panel-visionox-r66451.o
+ obj-$(CONFIG_DRM_PANEL_WIDECHIPS_WS2401) += panel-widechips-ws2401.o
+ obj-$(CONFIG_DRM_PANEL_AYANEO_WT0600_2K) += panel-wt0600-2k.o
+ obj-$(CONFIG_DRM_PANEL_XINPENG_XPP055C272) += panel-xinpeng-xpp055c272.o
++obj-$(CONFIG_DRM_PANEL_OCULUS_HOLLYWOOD_JDI) += panel-oculus-hollywood-jdi.o
+diff --git a/drivers/irqchip/irq-gic-v3.c b/drivers/irqchip/irq-gic-v3.c
+index 59f439da7..dfd2d65f7 100644
+--- a/drivers/irqchip/irq-gic-v3.c
++++ b/drivers/irqchip/irq-gic-v3.c
+@@ -963,6 +963,10 @@ static void __init gic_dist_init(void)
+ 	/* Now do the common stuff */
+ 	gic_dist_config(base, GIC_LINE_NR, dist_prio_irq);
+ 
++	/* Clear inherited pending SPIs across kexec before enabling distributor */
++	for (i = 32; i < GIC_LINE_NR; i += 32)
++		writel_relaxed(~0U, base + GICD_ICPENDR + i / 8);
++
+ 	val = GICD_CTLR_ARE_NS | GICD_CTLR_ENABLE_G1A | GICD_CTLR_ENABLE_G1;
+ 	if (gic_data.rdists.gicd_typer2 & GICD_TYPER2_nASSGIcap) {
+ 		pr_info("Enabling SGIs without active state\n");
+diff --git a/drivers/misc/Kconfig b/drivers/misc/Kconfig
+index 390256ed9..2882b3e6a 100644
+--- a/drivers/misc/Kconfig
++++ b/drivers/misc/Kconfig
+@@ -651,4 +651,12 @@ source "drivers/misc/mchp_pci1xxxx/Kconfig"
+ source "drivers/misc/keba/Kconfig"
+ source "drivers/misc/amd-sbi/Kconfig"
+ source "drivers/misc/rp1/Kconfig"
++
++config SYNCBOSS
++	tristate "Oculus SyncBoss SPI Driver"
++	depends on SPI
++	default y
++	help
++	  Oculus SyncBoss SPI driver for Meta Quest 2 (hollywood).
++
+ endmenu
+diff --git a/drivers/misc/Makefile b/drivers/misc/Makefile
+index fed47c767..4c0fa8e53 100644
+--- a/drivers/misc/Makefile
++++ b/drivers/misc/Makefile
+@@ -74,3 +74,4 @@ obj-$(CONFIG_MCHP_LAN966X_PCI)	+= lan966x-pci.o
+ obj-y				+= keba/
+ obj-y				+= amd-sbi/
+ obj-$(CONFIG_MISC_RP1)		+= rp1/
++obj-$(CONFIG_SYNCBOSS)		+= oculus/
+diff --git a/drivers/of/fdt.c b/drivers/of/fdt.c
+index 67b1da500..8306c83a4 100644
+--- a/drivers/of/fdt.c
++++ b/drivers/of/fdt.c
+@@ -1287,8 +1287,8 @@ static void *__init copy_device_tree(void *fdt)
+ static void __init restore_root_identity(void)
+ {
+ 	static const char * const names[][2] = {
+-		{ "pico4,compatible", "compatible" },
+-		{ "pico4,model", "model" },
++		{ "quest2,compatible", "compatible" },
++		{ "quest2,model", "model" },
+ 	};
+ 	struct property *saved, *prop;
+ 	int i;
+diff --git a/drivers/phy/qualcomm/phy-qcom-qmp-ufs.c b/drivers/phy/qualcomm/phy-qcom-qmp-ufs.c
+index 274e0d68b..de9ba3361 100644
+--- a/drivers/phy/qualcomm/phy-qcom-qmp-ufs.c
++++ b/drivers/phy/qualcomm/phy-qcom-qmp-ufs.c
+@@ -637,6 +637,69 @@ static const struct qmp_phy_init_tbl sm8150_ufsphy_hs_g4_pcs[] = {
+ 	QMP_PHY_INIT_CFG(QPHY_V4_PCS_UFS_BIST_FIXED_PAT_CTRL, 0x0a),
+ };
+ 
++static const struct qmp_phy_init_tbl hollywood_ufsphy_tx[] = {
++	QMP_PHY_INIT_CFG(QSERDES_V4_TX_PWM_GEAR_1_DIVIDER_BAND0_1, 0x06),
++	QMP_PHY_INIT_CFG(QSERDES_V4_TX_PWM_GEAR_2_DIVIDER_BAND0_1, 0x03),
++	QMP_PHY_INIT_CFG(QSERDES_V4_TX_PWM_GEAR_3_DIVIDER_BAND0_1, 0x01),
++	QMP_PHY_INIT_CFG(QSERDES_V4_TX_PWM_GEAR_4_DIVIDER_BAND0_1, 0x00),
++	QMP_PHY_INIT_CFG(QSERDES_V4_TX_LANE_MODE_1, 0x35),
++	QMP_PHY_INIT_CFG(QSERDES_V4_TX_TRAN_DRVR_EMP_EN, 0x0c),
++};
++
++static const struct qmp_phy_init_tbl hollywood_ufsphy_rx[] = {
++	QMP_PHY_INIT_CFG(QSERDES_V4_RX_SIGDET_LVL, 0x24),
++	QMP_PHY_INIT_CFG(QSERDES_V4_RX_SIGDET_CNTRL, 0x0f),
++	QMP_PHY_INIT_CFG(QSERDES_V4_RX_SIGDET_DEGLITCH_CNTRL, 0x1e),
++	QMP_PHY_INIT_CFG(QSERDES_V4_RX_RX_BAND, 0x18),
++	QMP_PHY_INIT_CFG(QSERDES_V4_RX_UCDR_FASTLOCK_FO_GAIN, 0x0a),
++	QMP_PHY_INIT_CFG(QSERDES_V4_RX_UCDR_SO_SATURATION_AND_ENABLE, 0x5a),
++	QMP_PHY_INIT_CFG(QSERDES_V4_RX_UCDR_PI_CONTROLS, 0xf1),
++	QMP_PHY_INIT_CFG(QSERDES_V4_RX_UCDR_FASTLOCK_COUNT_LOW, 0x80),
++	QMP_PHY_INIT_CFG(QSERDES_V4_RX_UCDR_PI_CTRL2, 0x80),
++	QMP_PHY_INIT_CFG(QSERDES_V4_RX_UCDR_FO_GAIN, 0x0e),
++	QMP_PHY_INIT_CFG(QSERDES_V4_RX_UCDR_SO_GAIN, 0x04),
++	QMP_PHY_INIT_CFG(QSERDES_V4_RX_RX_TERM_BW, 0x1b),
++	QMP_PHY_INIT_CFG(QSERDES_V4_RX_RX_EQU_ADAPTOR_CNTRL2, 0x06),
++	QMP_PHY_INIT_CFG(QSERDES_V4_RX_RX_EQU_ADAPTOR_CNTRL3, 0x04),
++	QMP_PHY_INIT_CFG(QSERDES_V4_RX_RX_EQU_ADAPTOR_CNTRL4, 0x1d),
++	QMP_PHY_INIT_CFG(QSERDES_V4_RX_RX_OFFSET_ADAPTOR_CNTRL2, 0x00),
++	QMP_PHY_INIT_CFG(QSERDES_V4_RX_RX_IDAC_MEASURE_TIME, 0x10),
++	QMP_PHY_INIT_CFG(QSERDES_V4_RX_RX_IDAC_TSETTLE_LOW, 0xc0),
++	QMP_PHY_INIT_CFG(QSERDES_V4_RX_RX_IDAC_TSETTLE_HIGH, 0x00),
++	QMP_PHY_INIT_CFG(QSERDES_V4_RX_RX_MODE_00_LOW, 0x6d),
++	QMP_PHY_INIT_CFG(QSERDES_V4_RX_RX_MODE_00_HIGH, 0x6d),
++	QMP_PHY_INIT_CFG(QSERDES_V4_RX_RX_MODE_00_HIGH2, 0xed),
++	QMP_PHY_INIT_CFG(QSERDES_V4_RX_RX_MODE_00_HIGH3, 0x3b),
++	QMP_PHY_INIT_CFG(QSERDES_V4_RX_RX_MODE_00_HIGH4, 0x3c),
++	QMP_PHY_INIT_CFG(QSERDES_V4_RX_RX_MODE_01_LOW, 0x6d),
++	QMP_PHY_INIT_CFG(QSERDES_V4_RX_RX_MODE_01_HIGH, 0x6d),
++	QMP_PHY_INIT_CFG(QSERDES_V4_RX_RX_MODE_01_HIGH2, 0xed),
++	QMP_PHY_INIT_CFG(QSERDES_V4_RX_RX_MODE_01_HIGH3, 0x3b),
++	QMP_PHY_INIT_CFG(QSERDES_V4_RX_RX_MODE_01_HIGH4, 0x3c),
++	QMP_PHY_INIT_CFG(QSERDES_V4_RX_RX_MODE_10_LOW, 0xe0),
++	QMP_PHY_INIT_CFG(QSERDES_V4_RX_RX_MODE_10_HIGH, 0xc8),
++	QMP_PHY_INIT_CFG(QSERDES_V4_RX_RX_MODE_10_HIGH2, 0xc8),
++	QMP_PHY_INIT_CFG(QSERDES_V4_RX_RX_MODE_10_HIGH3, 0x3b),
++	QMP_PHY_INIT_CFG(QSERDES_V4_RX_RX_MODE_10_HIGH4, 0xb1),
++};
++
++static const struct qmp_phy_init_tbl hollywood_ufsphy_pcs[] = {
++	QMP_PHY_INIT_CFG(QPHY_V4_PCS_UFS_RX_SIGDET_CTRL2, 0x6d),
++	QMP_PHY_INIT_CFG(QPHY_V4_PCS_UFS_TX_LARGE_AMP_DRV_LVL, 0x0a),
++	QMP_PHY_INIT_CFG(QPHY_V4_PCS_UFS_TX_SMALL_AMP_DRV_LVL, 0x02),
++	QMP_PHY_INIT_CFG(QPHY_V4_PCS_UFS_TX_MID_TERM_CTRL1, 0x43),
++	QMP_PHY_INIT_CFG(QPHY_V4_PCS_UFS_DEBUG_BUS_CLKSEL, 0x1f),
++	QMP_PHY_INIT_CFG(QPHY_V4_PCS_UFS_RX_MIN_HIBERN8_TIME, 0xff),
++	QMP_PHY_INIT_CFG(QPHY_V4_PCS_UFS_PLL_CNTL, 0x03),
++	QMP_PHY_INIT_CFG(QPHY_V4_PCS_UFS_TIMER_20US_CORECLK_STEPS_MSB, 0x16),
++	QMP_PHY_INIT_CFG(QPHY_V4_PCS_UFS_TIMER_20US_CORECLK_STEPS_LSB, 0xd8),
++	QMP_PHY_INIT_CFG(QPHY_V4_PCS_UFS_TX_PWM_GEAR_BAND, 0xaa),
++	QMP_PHY_INIT_CFG(QPHY_V4_PCS_UFS_TX_HS_GEAR_BAND, 0x06),
++	QMP_PHY_INIT_CFG(QPHY_V4_PCS_UFS_TX_HSGEAR_CAPABILITY, 0x03),
++	QMP_PHY_INIT_CFG(QPHY_V4_PCS_UFS_RX_HSGEAR_CAPABILITY, 0x03),
++	QMP_PHY_INIT_CFG(QPHY_V4_PCS_UFS_MULTI_LANE_CTRL1, 0x02),
++};
++
+ static const struct qmp_phy_init_tbl sm8250_ufsphy_hs_g4_tx[] = {
+ 	QMP_PHY_INIT_CFG(QSERDES_V4_TX_LANE_MODE_1, 0xe5),
+ };
+@@ -1593,6 +1656,31 @@ static const struct qmp_phy_cfg sm8150_ufsphy_cfg = {
+ 	.regs			= ufsphy_v4_regs_layout,
+ };
+ 
++static const struct qmp_phy_cfg hollywood_ufsphy_cfg = {
++	.lanes			= 2,
++
++	.offsets		= &qmp_ufs_offsets,
++	.max_supported_gear	= UFS_HS_G3,
++
++	.tbls = {
++		.serdes		= sm8150_ufsphy_serdes,
++		.serdes_num	= ARRAY_SIZE(sm8150_ufsphy_serdes),
++		.tx		= hollywood_ufsphy_tx,
++		.tx_num		= ARRAY_SIZE(hollywood_ufsphy_tx),
++		.rx		= hollywood_ufsphy_rx,
++		.rx_num		= ARRAY_SIZE(hollywood_ufsphy_rx),
++		.pcs		= hollywood_ufsphy_pcs,
++		.pcs_num	= ARRAY_SIZE(hollywood_ufsphy_pcs),
++	},
++	.tbls_hs_b = {
++		.serdes		= sm8150_ufsphy_hs_b_serdes,
++		.serdes_num	= ARRAY_SIZE(sm8150_ufsphy_hs_b_serdes),
++	},
++	.vreg_list		= sm8250_ufsphy_vreg_l,
++	.num_vregs		= ARRAY_SIZE(sm8250_ufsphy_vreg_l),
++	.regs			= ufsphy_v4_regs_layout,
++};
++
+ static const struct qmp_phy_cfg sm8250_ufsphy_cfg = {
+ 	.lanes			= 2,
+ 
+@@ -2338,6 +2426,9 @@ static const struct of_device_id qmp_ufs_of_match_table[] = {
+ 	}, {
+ 		.compatible = "qcom,sm8150-qmp-ufs-phy",
+ 		.data = &sm8150_ufsphy_cfg,
++	}, {
++		.compatible = "oculus,hollywood-qmp-ufs-phy",
++		.data = &hollywood_ufsphy_cfg,
+ 	}, {
+ 		.compatible = "qcom,sm8250-qmp-ufs-phy",
+ 		.data = &sm8250_ufsphy_cfg,
+diff --git a/drivers/regulator/Kconfig b/drivers/regulator/Kconfig
+index a10f2b2a3..7aa7a9a52 100644
+--- a/drivers/regulator/Kconfig
++++ b/drivers/regulator/Kconfig
+@@ -1933,4 +1933,10 @@ config REGULATOR_QCOM_LABIBB
+ 	  boost regulator and IBB can be used as a negative boost regulator
+ 	  for LCD display panel.
+ 
++config REGULATOR_QCOM_PM8150L_LCDB
++	tristate "Qualcomm PM8150L LCDB regulator support"
++	depends on MFD_SPMI_PMIC && REGMAP_SPMI
++	help
++	  Minimal LCDB (+/-5.7V LCD bias) regulator driver for Qualcomm PM8150L.
++
+ endif
+diff --git a/drivers/regulator/Makefile b/drivers/regulator/Makefile
+index 766f81a32..c709a7cfb 100644
+--- a/drivers/regulator/Makefile
++++ b/drivers/regulator/Makefile
+@@ -126,6 +126,7 @@ obj-$(CONFIG_REGULATOR_MTK_DVFSRC) += mtk-dvfsrc-regulator.o
+ obj-$(CONFIG_REGULATOR_NEX10000UB) += nex10000ub-regulator.o
+ obj-$(CONFIG_REGULATOR_NEX10000UB_DUAL) += nex10000ub-dual-regulator.o
+ obj-$(CONFIG_REGULATOR_QCOM_LABIBB) += qcom-labibb-regulator.o
++obj-$(CONFIG_REGULATOR_QCOM_PM8150L_LCDB) += qcom-pm8150l-lcdb.o
+ obj-$(CONFIG_REGULATOR_QCOM_PM8008) += qcom-pm8008-regulator.o
+ obj-$(CONFIG_REGULATOR_QCOM_REFGEN) += qcom-refgen-regulator.o
+ obj-$(CONFIG_REGULATOR_QCOM_RPM) += qcom_rpm-regulator.o
+diff --git a/drivers/soc/qcom/qcom_aoss.c b/drivers/soc/qcom/qcom_aoss.c
+index 259c41f0c..296939696 100644
+--- a/drivers/soc/qcom/qcom_aoss.c
++++ b/drivers/soc/qcom/qcom_aoss.c
+@@ -646,6 +646,28 @@ static void qmp_remove(struct platform_device *pdev)
+ 	mbox_free_channel(qmp->mbox_chan);
+ }
+ 
++static void qmp_shutdown(struct platform_device *pdev)
++{
++	struct qmp *qmp = platform_get_drvdata(pdev);
++	int ret;
++
++	if (!qmp)
++		return;
++
++	writel(QMP_STATE_DOWN, qmp->msgram + QMP_DESC_MCORE_CH_STATE);
++	qmp_kick(qmp);
++	ret = wait_event_timeout(qmp->event,
++				 readl(qmp->msgram + QMP_DESC_UCORE_CH_STATE) == QMP_STATE_DOWN,
++				 HZ / 2);
++	if (ret) {
++		writel(QMP_STATE_DOWN, qmp->msgram + QMP_DESC_UCORE_CH_STATE_ACK);
++		qmp_kick(qmp);
++		wait_event_timeout(qmp->event,
++				   readl(qmp->msgram + QMP_DESC_MCORE_CH_STATE_ACK) == QMP_STATE_DOWN,
++				   HZ / 2);
++	}
++}
++
+ static const struct of_device_id qmp_dt_match[] = {
+ 	{ .compatible = "qcom,sc7180-aoss-qmp", },
+ 	{ .compatible = "qcom,sc7280-aoss-qmp", },
+@@ -666,6 +688,7 @@ static struct platform_driver qmp_driver = {
+ 	},
+ 	.probe = qmp_probe,
+ 	.remove = qmp_remove,
++	.shutdown = qmp_shutdown,
+ };
+ module_platform_driver(qmp_driver);
+ 
+diff --git a/drivers/soc/qcom/rpmh-rsc.c b/drivers/soc/qcom/rpmh-rsc.c
+index e88cc9692..e64e1bb6e 100644
+--- a/drivers/soc/qcom/rpmh-rsc.c
++++ b/drivers/soc/qcom/rpmh-rsc.c
+@@ -1144,6 +1144,9 @@ static int rpmh_rsc_probe(struct platform_device *pdev)
+ 	if (irq < 0)
+ 		return irq;
+ 
++	/* Clear any stale pending TCS IRQs inherited across kexec */
++	writel_relaxed(~0U, drv->tcs_base + drv->regs[RSC_DRV_IRQ_CLEAR]);
++
+ 	ret = devm_request_irq(&pdev->dev, irq, tcs_tx_done,
+ 			       IRQF_TRIGGER_HIGH | IRQF_NO_SUSPEND,
+ 			       drv->name, drv);
+diff --git a/drivers/spmi/spmi-pmic-arb.c b/drivers/spmi/spmi-pmic-arb.c
+index 2e2cb4774..b6e824811 100644
+--- a/drivers/spmi/spmi-pmic-arb.c
++++ b/drivers/spmi/spmi-pmic-arb.c
+@@ -2018,6 +2018,26 @@ static int spmi_pmic_arb_bus_init(struct platform_device *pdev,
+ 	if (ret)
+ 		return ret;
+ 
++	/* Quiesce APPS-owned SPMI APIDs inherited across kexec before chaining IRQ */
++	{
++		u16 ppid, apid;
++
++		for (ppid = 0; ppid < PMIC_ARB_MAX_PPID; ppid++) {
++			apid = bus->ppid_to_apid[ppid];
++			if (!(apid & PMIC_ARB_APID_VALID))
++				continue;
++			apid &= ~PMIC_ARB_APID_VALID;
++			if (apid < bus->base_apid ||
++			    apid >= bus->base_apid + bus->apid_count)
++				continue;
++			if (bus->apid_data[apid].irq_ee == pmic_arb->ee &&
++			    bus->apid_data[apid].write_ee == pmic_arb->ee) {
++				writel_relaxed(0, pmic_arb->ver_ops->acc_enable(bus, apid));
++				writel_relaxed(~0U, pmic_arb->ver_ops->irq_clear(bus, apid));
++			}
++		}
++	}
++
+ 	dev_dbg(&pdev->dev, "adding irq domain for bus %d\n", bus_index);
+ 
+ 	bus->domain = irq_domain_create_tree(of_fwnode_handle(node), &pmic_arb_irq_domain_ops, bus);
+diff --git a/drivers/usb/dwc3/core.c b/drivers/usb/dwc3/core.c
+index ceb49f2f8..3c71dda82 100644
+--- a/drivers/usb/dwc3/core.c
++++ b/drivers/usb/dwc3/core.c
+@@ -2441,6 +2441,14 @@ static void dwc3_remove(struct platform_device *pdev)
+ 	dwc3_core_remove(platform_get_drvdata(pdev));
+ }
+ 
++static void dwc3_shutdown(struct platform_device *pdev)
++{
++	struct dwc3 *dwc = platform_get_drvdata(pdev);
++
++	if (dwc)
++		dwc3_core_remove(dwc);
++}
++
+ #ifdef CONFIG_PM
+ static int dwc3_core_init_for_resume(struct dwc3 *dwc)
+ {
+@@ -2849,6 +2857,7 @@ MODULE_DEVICE_TABLE(acpi, dwc3_acpi_match);
+ static struct platform_driver dwc3_driver = {
+ 	.probe		= dwc3_probe,
+ 	.remove		= dwc3_remove,
++	.shutdown	= dwc3_shutdown,
+ 	.driver		= {
+ 		.name	= "dwc3",
+ 		.of_match_table	= of_match_ptr(of_dwc3_match),
+diff --git a/drivers/usb/dwc3/dwc3-qcom-legacy.c b/drivers/usb/dwc3/dwc3-qcom-legacy.c
+index d3fad0fcf..525b35918 100644
+--- a/drivers/usb/dwc3/dwc3-qcom-legacy.c
++++ b/drivers/usb/dwc3/dwc3-qcom-legacy.c
+@@ -863,6 +863,24 @@ static void dwc3_qcom_remove(struct platform_device *pdev)
+ 	pm_runtime_disable(dev);
+ }
+ 
++static void dwc3_qcom_shutdown(struct platform_device *pdev)
++{
++	struct dwc3_qcom *qcom = platform_get_drvdata(pdev);
++	int i;
++
++	if (!qcom)
++		return;
++
++	dwc3_qcom_disable_interrupts(qcom);
++	if (!qcom->is_suspended) {
++		for (i = qcom->num_clocks - 1; i >= 0; i--)
++			clk_disable_unprepare(qcom->clks[i]);
++		dwc3_qcom_interconnect_disable(qcom);
++		qcom->is_suspended = true;
++	}
++	reset_control_assert(qcom->resets);
++}
++
+ static int __maybe_unused dwc3_qcom_pm_suspend(struct device *dev)
+ {
+ 	struct dwc3_qcom *qcom = dev_get_drvdata(dev);
+@@ -922,6 +940,7 @@ MODULE_DEVICE_TABLE(of, dwc3_qcom_of_match);
+ static struct platform_driver dwc3_qcom_driver = {
+ 	.probe		= dwc3_qcom_probe,
+ 	.remove		= dwc3_qcom_remove,
++	.shutdown	= dwc3_qcom_shutdown,
+ 	.driver		= {
+ 		.name	= "dwc3-qcom-legacy",
+ 		.pm	= &dwc3_qcom_dev_pm_ops,
+diff --git a/drivers/usb/gadget/function/u_ether.c b/drivers/usb/gadget/function/u_ether.c
+index 59d85d6a8..2204fb13b 100644
+--- a/drivers/usb/gadget/function/u_ether.c
++++ b/drivers/usb/gadget/function/u_ether.c
+@@ -18,8 +18,10 @@
+ #include <linux/ethtool.h>
+ #include <linux/hex.h>
+ #include <linux/if_vlan.h>
++#include <linux/sched/mm.h>
+ #include <linux/string_helpers.h>
+ #include <linux/usb/composite.h>
++#include <linux/workqueue.h>
+ 
+ #include "u_ether.h"
+ 
+@@ -76,7 +78,8 @@ struct eth_dev {
+ 						struct sk_buff *skb,
+ 						struct sk_buff_head *list);
+ 
+-	struct work_struct	work;
++	struct workqueue_struct *rx_wq;
++	struct delayed_work	rx_work;
+ 
+ 	unsigned long		todo;
+ #define	WORK_RX_MEMORY		0
+@@ -130,14 +133,19 @@ static const struct ethtool_ops ops = {
+ 	.get_link = ethtool_op_get_link,
+ };
+ 
+-static void defer_kevent(struct eth_dev *dev, int flag)
++static void defer_kevent_delay(struct eth_dev *dev, int flag, unsigned long delay)
+ {
+ 	if (test_and_set_bit(flag, &dev->todo))
+ 		return;
+-	if (!schedule_work(&dev->work))
+-		ERROR(dev, "kevent %d may have been dropped\n", flag);
++	if (dev->rx_wq)
++		queue_delayed_work(dev->rx_wq, &dev->rx_work, delay);
+ 	else
+-		DBG(dev, "kevent %d scheduled\n", flag);
++		schedule_delayed_work(&dev->rx_work, delay);
++}
++
++static void defer_kevent(struct eth_dev *dev, int flag)
++{
++	defer_kevent_delay(dev, flag, 0);
+ }
+ 
+ static void rx_complete(struct usb_ep *ep, struct usb_request *req);
+@@ -209,8 +217,11 @@ rx_submit(struct eth_dev *dev, struct usb_request *req, gfp_t gfp_flags)
+ 	retval = usb_ep_queue(out, req, gfp_flags);
+ 	if (retval == -ENOMEM)
+ enomem:
+-		defer_kevent(dev, WORK_RX_MEMORY);
++		defer_kevent_delay(dev, WORK_RX_MEMORY, msecs_to_jiffies(2));
+ 	if (retval) {
++		if (retval != -ENOTCONN && retval != -ESHUTDOWN)
++			net_warn_ratelimited("%s: rx_submit failed (%d)\n",
++					     dev->net->name, retval);
+ 		DBG(dev, "rx submit --> %d\n", retval);
+ 		if (skb)
+ 			dev_kfree_skb_any(skb);
+@@ -310,7 +321,7 @@ static void rx_complete(struct usb_ep *ep, struct usb_request *req)
+ 		req = NULL;
+ 	}
+ 	if (req)
+-		rx_submit(dev, req, GFP_ATOMIC);
++		rx_submit(dev, req, GFP_ATOMIC | __GFP_MEMALLOC);
+ }
+ 
+ static int prealloc(struct list_head *list, struct usb_ep *ep, unsigned n)
+@@ -384,7 +395,8 @@ static void rx_fill(struct eth_dev *dev, gfp_t gfp_flags)
+ 		spin_unlock_irqrestore(&dev->req_lock, flags);
+ 
+ 		if (rx_submit(dev, req, gfp_flags) < 0) {
+-			defer_kevent(dev, WORK_RX_MEMORY);
++			defer_kevent_delay(dev, WORK_RX_MEMORY,
++					   msecs_to_jiffies(2));
+ 			return;
+ 		}
+ 
+@@ -395,11 +407,16 @@ static void rx_fill(struct eth_dev *dev, gfp_t gfp_flags)
+ 
+ static void eth_work(struct work_struct *work)
+ {
+-	struct eth_dev	*dev = container_of(work, struct eth_dev, work);
++	struct eth_dev	*dev = container_of(to_delayed_work(work),
++					    struct eth_dev, rx_work);
+ 
+ 	if (test_and_clear_bit(WORK_RX_MEMORY, &dev->todo)) {
+-		if (netif_running(dev->net))
+-			rx_fill(dev, GFP_KERNEL);
++		if (netif_running(dev->net)) {
++			unsigned int noio = memalloc_noio_save();
++
++			rx_fill(dev, GFP_NOIO | __GFP_MEMALLOC);
++			memalloc_noio_restore(noio);
++		}
+ 	}
+ 
+ 	if (dev->todo)
+@@ -579,6 +596,7 @@ static netdev_tx_t eth_start_xmit(struct sk_buff *skb,
+ 	retval = usb_ep_queue(in, req, GFP_ATOMIC);
+ 	switch (retval) {
+ 	default:
++		net_warn_ratelimited("%s: tx queue err %d\n", net->name, retval);
+ 		DBG(dev, "tx queue err %d\n", retval);
+ 		break;
+ 	case 0:
+@@ -755,7 +773,7 @@ struct eth_dev *gether_setup_name(struct usb_gadget *g,
+ 	dev = netdev_priv(net);
+ 	spin_lock_init(&dev->lock);
+ 	spin_lock_init(&dev->req_lock);
+-	INIT_WORK(&dev->work, eth_work);
++	INIT_DELAYED_WORK(&dev->rx_work, eth_work);
+ 	INIT_LIST_HEAD(&dev->tx_reqs);
+ 	INIT_LIST_HEAD(&dev->rx_reqs);
+ 
+@@ -808,6 +826,8 @@ struct eth_dev *gether_setup_name(struct usb_gadget *g,
+ 		 *  - tx queueing enabled if open *and* carrier is "on"
+ 		 */
+ 		netif_carrier_off(net);
++		dev->rx_wq = alloc_workqueue("u_ether_rx",
++					     WQ_MEM_RECLAIM | WQ_HIGHPRI, 1);
+ 	}
+ 
+ 	return dev;
+@@ -826,7 +846,7 @@ struct net_device *gether_setup_name_default(const char *netname)
+ 	dev = netdev_priv(net);
+ 	spin_lock_init(&dev->lock);
+ 	spin_lock_init(&dev->req_lock);
+-	INIT_WORK(&dev->work, eth_work);
++	INIT_DELAYED_WORK(&dev->rx_work, eth_work);
+ 	INIT_LIST_HEAD(&dev->tx_reqs);
+ 	INIT_LIST_HEAD(&dev->rx_reqs);
+ 
+@@ -883,6 +903,8 @@ int gether_register_netdev(struct net_device *net)
+ 		 *  - tx queueing enabled if open *and* carrier is "on"
+ 		 */
+ 		netif_carrier_off(net);
++		dev->rx_wq = alloc_workqueue("u_ether_rx",
++					     WQ_MEM_RECLAIM | WQ_HIGHPRI, 1);
+ 	}
+ 
+ 	return status;
+@@ -1115,7 +1137,11 @@ void gether_cleanup(struct eth_dev *dev)
+ 		return;
+ 
+ 	unregister_netdev(dev->net);
+-	flush_work(&dev->work);
++	cancel_delayed_work_sync(&dev->rx_work);
++	if (dev->rx_wq) {
++		destroy_workqueue(dev->rx_wq);
++		dev->rx_wq = NULL;
++	}
+ 	free_netdev(dev->net);
+ }
+ EXPORT_SYMBOL_GPL(gether_cleanup);
+diff --git a/drivers/watchdog/qcom-wdt.c b/drivers/watchdog/qcom-wdt.c
+index d743884e2..b77d4dbb8 100644
+--- a/drivers/watchdog/qcom-wdt.c
++++ b/drivers/watchdog/qcom-wdt.c
+@@ -376,8 +376,17 @@ static const struct of_device_id qcom_wdt_of_table[] = {
+ };
+ MODULE_DEVICE_TABLE(of, qcom_wdt_of_table);
+ 
++static void qcom_wdt_shutdown(struct platform_device *pdev)
++{
++	struct qcom_wdt *wdt = platform_get_drvdata(pdev);
++
++	if (wdt && qcom_wdt_is_running(&wdt->wdd))
++		qcom_wdt_ping(&wdt->wdd);
++}
++
+ static struct platform_driver qcom_watchdog_driver = {
+ 	.probe	= qcom_wdt_probe,
++	.shutdown = qcom_wdt_shutdown,
+ 	.driver	= {
+ 		.name		= KBUILD_MODNAME,
+ 		.of_match_table	= qcom_wdt_of_table,
