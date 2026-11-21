@@ -2053,3 +2053,16 @@ Bootargs:
    modules + `CM710X.bin` firmware).
 10. **Battery & Input**: `battery` (54%, 3.865 V, 34.5 °C, Charging),
     `qpnp_pon` (`event0`), `gpio-keys` (`event1`), USB Ethernet (`usb0`).
+
+## Stage 5 MILESTONE: Native 1920x3664@120Hz DRM/KMS Display Scanout (2026-11-21)
+
+- Compiled static ARM64 DRM/KMS probe + dumb-buffer scanout test (`drm_test`)
+  and ran it live on the Quest 2 over `10.42.0.2`.
+- Enumerated DSI connector `id=29` (`type=16`, `connection=1`) with **61 native
+  modes** (`1920x3664@120Hz` down to `60Hz`).
+- Allocated a 32-bpp dumb framebuffer (`1920x3664`), painted RGBW test stripes,
+  and executed `DRM_IOCTL_MODE_SETCRTC` on `conn=29 crtc=129` ->
+  **`SETCRTC SUCCEEDED!`** (zero kernel warnings/errors).
+- Mounted UFS `modem_b` (`/dev/sde24`) read-only at `/tmp/modem` and confirmed
+  stock firmware images (`a650_zap.mdt/b00..b02`, `adsp.*`, `cdsp.*`, `venus.*`)
+  are directly readable from native Linux.
