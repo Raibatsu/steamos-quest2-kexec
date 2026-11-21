@@ -2018,3 +2018,38 @@ shell over USB CDC-Ethernet on Meta Quest 2 (`hollywood`, Horizon
   - Clean `reboot -f` from inside Linux back to Horizon OS.
 
 **Stage 4 (First Recoverable Native Linux Boot) is COMPLETE.**
+
+---
+
+# Stage 5: Native Linux Hardware Bring-Up (Live Quest 2)
+
+## Jump #14–#15 Hardware Bring-Up Results (2026-11-21)
+
+Bootargs:
+`rdinit=/init loglevel=7 lpm_levels.sleep_disabled=1 msm_drm.dsi_display0=qcom,mdss_dsi_jdi_4k_120Hz_dsc_video: regulator_ignore_unused initcall_blacklist=qseecom_init`
+
+### Verified Working Live on Native Linux (`4.19.325-cip128-st12+`):
+1. **All 8 CPUs (`0-7`) + 3-cluster CPUfreq**: `cpu0` 300 MHz, `cpu4` 710.4 MHz,
+   `cpu7` 844.8 MHz (`powersave` governor), zero secondary-CPU stalls with
+   `lpm_levels.sleep_disabled=1`.
+2. **Physical 4K 120 Hz Display + DRM/KMS**:
+   `Successfully bind display panel 'qcom,mdss_dsi_jdi_4k_120Hz_dsc_video'`
+   (60–120 Hz DFPS, dual-LM/dual-DSC/dual-INTF topology), `/dev/dri/card0`,
+   `/dev/dri/renderD128`, `card0-DSI-1`, `sde-crtc-0/1`.
+3. **Backlight**: `/sys/class/backlight/panel0-backlight` (`brightness=255/255`).
+4. **Fan & Thermal (`pwm-tach-fan0`)**: Unblocked by active panel binding;
+   `cooling_device14` (`pwm-tach-fan0`) active at state `4/7` (dropped from
+   100% failsafe). All 15 cooling devices (`thermal-cpufreq-0/4/7`, `npu`,
+   `cpu-isolate0..7`, `panel0-backlight`, `battery`, `pwm-tach-fan0`) active.
+5. **Zero kernel aborts**: `regulator_ignore_unused` completely eliminated the
+   `t=33.76 s` `mvs1_gdsc` external abort.
+6. **UFS Storage**: All LUNs (`/dev/sda`, `/dev/sdb`, `/dev/sdc`, `/dev/sde1..50`).
+7. **PCIe Wi-Fi hardware**: `cnss_pci 0000:01:00.0` (QCA6390 `17cb:1101`)
+   trained PCIe RC0, enabled SMMU S1, assigned BAR0 `0x60300000` (awaiting
+   `wlan.ko` + firmware).
+8. **SyncBoss & Camera V4L2 nodes**: `/dev/syncboss0`, `_control0`,
+   `_powerstate0`, `_stream0`; `/dev/video0..1,32..33`.
+9. **Audio codec**: `cm710x_spi spi1.0` probed cleanly (awaiting Kona audio
+   modules + `CM710X.bin` firmware).
+10. **Battery & Input**: `battery` (54%, 3.865 V, 34.5 °C, Charging),
+    `qpnp_pon` (`event0`), `gpio-keys` (`event1`), USB Ethernet (`usb0`).
