@@ -2066,3 +2066,18 @@ Bootargs:
 - Mounted UFS `modem_b` (`/dev/sde24`) read-only at `/tmp/modem` and confirmed
   stock firmware images (`a650_zap.mdt/b00..b02`, `adsp.*`, `cdsp.*`, `venus.*`)
   are directly readable from native Linux.
+
+## Stage 5 Progress: Eyeball-Verified Display, All 28 Kernel Modules, QCA6390 QMI WLFW Connect (2026-11-21)
+
+- **Physical Display Confirmed**: User confirmed visible RGBW test graphics inside the Quest 2 headset during `/tmp/drm_test` (`1920x3664 @ 120 Hz`, `SETCRTC` on `conn=29 crtc=129`).
+- **Firmware Pulled (read-only into gitignored `private-captures/firmware/`)**:
+  - GPU: `a650_gmu.bin` (41 KB), `a650_sqe.fw` (32 KB), `a650_zap.elf` (14 KB)
+  - Wi-Fi: `WCNSS_qcom_cfg.ini` (8.5 KB), `bdwlan.elf` (57 KB) (plus `amss20.bin`, `m3.bin`, `Data.msc`, `regdb.bin` mounted read-only from `modem_b` `/dev/sde24`)
+  - Audio: `CM710X.bin` (111 KB)
+- **All 28 Target Kernel Modules Built (`target-out`)**:
+  - Built with `ARCH=arm64 CC=clang LD=ld.lld CROSS_COMPILE=aarch64-linux-gnu- CLANG_TRIPLE=aarch64-linux-gnu- KCFLAGS="-Wno-strict-prototypes -Wno-implicit-enum-enum-cast -Wno-error -I$(srctree)/drivers/pinctrl" modules`.
+  - Produced `wlan.ko` (11 MB stripped) and all 12 Kona audio DLKMs (`snd_event_dlkm`, `q6_pdr_dlkm`, `q6_notifier_dlkm`, `apr_dlkm`, `q6_dlkm`, `adsp_loader_dlkm`, `pinctrl_lpi_dlkm`, `audio_ext_clk_up_dlkm`, `stub_dlkm`, `hdmi_dlkm`, `platform_dlkm`, `machine_dlkm`).
+- **Jump #16 Live Tests (`10.42.0.2`)**:
+  - **Wi-Fi (`QCA6390`)**: `insmod wlan.ko` succeeded (`rc=0`), enabled all 5 WLAN regulators + `WLAN_EN`, trained PCIe RC0, and booted QCA6390 over MHI to `MISSION_MODE(6)`. Built a 170-line static ARM64 `qrtr-ns` (Linux 4.19 has no in-kernel QRTR nameserver); once started, QCA6390 (`node 7 port 1`) announced `WLFW_SERVICE_ID_V01` (`svc=69`) and `cnss2` achieved **`QMI WLFW service connected`** (`Sending indication register message` + `Sending host capability message`). Because `wlan.ko` had been loaded before `qrtr-ns`, `cnss2` was already in `CNSS_DRIVER_RECOVERY` (`state: 0x611`); starting `qrtr-ns` *before* `insmod wlan.ko` on the next clean boot is the next test for live `wlan0`.
+  - **Audio**: All 12 Kona audio DLKMs loaded cleanly (`rc=0`). Writing `1` to `/sys/kernel/boot_adsp/boot` invoked `subsys-pil-tz 17300000.qcom,lpass: adsp: loading from 0x8a100000 to 0x8be00000`, which returned `PAS_INIT_IMAGE rc=-22` (needs investigation).
+  - **GPU (`kgsl-3d0`)**: Staged `a650_gmu.bin`, `a650_sqe.fw`, `a650_zap.*` in `/lib/firmware/`. Binding `3d00000.qcom,kgsl-3d0` steps through all 7 OPPs (`305–670 MHz`) and returns silently before creating `/dev/kgsl-3d0`; next step is instrumenting `adreno_probe()` to see the exact failing sub-call.
