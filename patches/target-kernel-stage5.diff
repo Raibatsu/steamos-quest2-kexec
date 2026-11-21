@@ -186,7 +186,7 @@ index 3a48c03a..3fcc491e 100644
  		node_dev->node_info->defer_qos = true;
  		goto exit_init_qos;
 diff --git a/drivers/soc/qcom/subsys-pil-tz.c b/drivers/soc/qcom/subsys-pil-tz.c
-index ae632988..7e124f89 100644
+index ae632988..010e3524 100644
 --- a/drivers/soc/qcom/subsys-pil-tz.c
 +++ b/drivers/soc/qcom/subsys-pil-tz.c
 @@ -1,3 +1,4 @@
@@ -194,15 +194,15 @@ index ae632988..7e124f89 100644
  // SPDX-License-Identifier: GPL-2.0-only
  /*
   * Copyright (c) 2014-2021, The Linux Foundation. All rights reserved.
-@@ -22,6 +23,7 @@
- #include <soc/qcom/subsystem_restart.h>
- #include <soc/qcom/ramdump.h>
- #include <soc/qcom/scm.h>
-+#include <soc/qcom/qtee_shmbridge.h>
+@@ -14,6 +15,7 @@
+ #include <linux/interrupt.h>
+ #include <linux/delay.h>
+ #include <linux/slab.h>
++#include <linux/mm.h>
  
- #include <linux/soc/qcom/smem.h>
- #include <linux/soc/qcom/smem_state.h>
-@@ -612,10 +614,8 @@ static int pil_init_image_trusted(struct pil_desc *pil,
+ #include <linux/msm-bus-board.h>
+ #include <linux/msm-bus.h>
+@@ -612,10 +614,10 @@ static int pil_init_image_trusted(struct pil_desc *pil,
  {
  	struct pil_tz_data *d = desc_to_data(pil);
  	u32 scm_ret = 0;
@@ -210,11 +210,13 @@ index ae632988..7e124f89 100644
  	int ret;
 -	unsigned long attrs = 0;
 -	struct device *dev;
-+	struct qtee_shm shm = {0};
++	unsigned long mdata_va;
++	unsigned int order;
++	size_t aligned_size = PAGE_ALIGN(size);
  	struct scm_desc *desc;
  
  	if (d->subsys_desc.no_auth)
-@@ -625,22 +625,17 @@ static int pil_init_image_trusted(struct pil_desc *pil,
+@@ -625,34 +627,57 @@ static int pil_init_image_trusted(struct pil_desc *pil,
  	if (ret)
  		return ret;
  
@@ -228,23 +230,30 @@ index ae632988..7e124f89 100644
 -					attrs);
 -	if (!mdata_buf) {
 -		dev_err(pil->dev, "Failed to map memory for metadata.\n");
-+	ret = qtee_shmbridge_allocate_shm(size, &shm);
-+	if (ret || !shm.vaddr) {
-+		dev_err(pil->dev, "Failed to allocate shmbridge for metadata: %d\n",
-+			ret);
++	order = get_order(aligned_size);
++	mdata_va = __get_free_pages(GFP_KERNEL, order);
++	if (!mdata_va) {
++		dev_err(pil->dev, "Failed to allocate buddy pages for metadata (size=%zu)\n",
++			size);
  		scm_pas_disable_bw();
 -		kfree(dev);
  		return -ENOMEM;
  	}
  
 -	memcpy(mdata_buf, metadata, size);
-+	mdata_phys = shm.paddr;
-+	memcpy(shm.vaddr, metadata, size);
-+	__flush_dcache_area(shm.vaddr, size);
++	mdata_phys = virt_to_phys((void *)mdata_va);
++	memset((void *)mdata_va, 0, aligned_size);
++	memcpy((void *)mdata_va, metadata, size);
++	__flush_dcache_area((void *)mdata_va, aligned_size);
  
  	desc = kzalloc(sizeof(struct scm_desc), GFP_KERNEL);
++	if (!desc) {
++		free_pages(mdata_va, order);
++		scm_pas_disable_bw();
++		return -ENOMEM;
++	}
  	desc->args[0] = d->pas_id;
-@@ -648,11 +643,32 @@ static int pil_init_image_trusted(struct pil_desc *pil,
+ 	desc->args[1] = mdata_phys;
  	desc->arginfo = SCM_ARGS(2, SCM_VAL, SCM_RW);
  	ret = scm_call2(SCM_SIP_FNID(SCM_SVC_PIL, PAS_INIT_IMAGE_CMD), desc);
  	scm_ret = desc->ret[0];
@@ -273,7 +282,7 @@ index ae632988..7e124f89 100644
  	kfree(desc);
  
 -	dma_free_attrs(dev, size, mdata_buf, mdata_phys, attrs);
-+	qtee_shmbridge_free_shm(&shm);
++	free_pages(mdata_va, order);
  	scm_pas_disable_bw();
 -	kfree(dev);
  	if (ret)

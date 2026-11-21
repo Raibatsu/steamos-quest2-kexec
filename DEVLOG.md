@@ -2144,3 +2144,20 @@ Bootargs:
   - **Read-Only Captures into `private-captures/`**:
     - Saved unsorted `/sys/firmware/fdt` to `private-captures/horizon-raw-fdt.dtb` (`517,088` bytes) for `fdtput`-only in-place patching in Jump #22.
     - Saved QCA6390 v2.0 Bluetooth firmware `/vendor/bt_firmware/image/{htbtfw20.tlv,htnv20.bin}` (`205,760` and `5,839` bytes) to `private-captures/firmware/qca/`.
+
+## Stage 5 COMPLETE (PIL Solved! GPU `/dev/kgsl-3d0` + `a650_zap` & ADSP + APR Verified Live — Jump #22 & #23, 2026-11-21)
+
+- **Jump #22 Pstore Confirmation (`a650_zap` Locked Inside `linux,cma` Across Kexec)**:
+  - Unsorted `fdtput`-patched `boot-130-j22.dtb` (`horizon-raw-fdt.dtb` without `dtc -s`) restored native Horizon OS CMA placement byte-for-byte (`linux,cma` at `0xfdc00000`, `qseecom_region` at `0xfc800000`) on Jump #22 (`4.19.325-cip128-st12+ #11`).
+  - However, `/tmp/j22/gpu_test` hung CPU 7 (`Watchdog bark! Now = 40.213737`, `SMP: failed to stop secondary CPUs 0-7`), because Horizon OS loads `a650_zap` (`subsys5`, `pas_id=13`) at `0x00000000fdd00000..0x00000000fdd01000` (inside `linux,cma`) and `loader/loader.c` `dsp_names[]` only shut down `{ "adsp", "cdsp", "slpi" }`, leaving `0xfdd00000` XPU/Stage-2 locked across kexec.
+  - **Fix in `loader/loader.c`**: Added `"a650_zap"` to `dsp_names[]` under `shutdown_dsps=1`, rebuilt `quest_kexec.ko`.
+- **Jump #23 Live Verification (`4.19.325-cip128-st12+ #11`, `payload_base=0x100000000`, booted in `4.6s`)**:
+  - **Kona ADSP & APR IPC**: Loaded all 12 audio DLKMs cleanly and triggered `echo 1 > /sys/kernel/boot_adsp/boot`:
+    - `qkx-pil: PAS_INIT_IMAGE pas_id=1 mdata_phys=0x00000001efcbc000 size=8220 ret=0 scm_ret=0`
+    - `adsp: Brought out of reset` -> `adsp: Power/Clock ready interrupt received` -> `adsprpc: opened rpmsg channel for adsp` -> `apr_tal_rpmsg: Channel[apr_audio_svc] state[Up]`. (Remaining `machine_dlkm` card registration just needs PDR bypass / `pd-mapper`, matching `q2-audio-no-pdr.patch` in `quest2-steamos`, not needed once moving to mainline 7.2 `qdsp6`.)
+  - **Adreno 650 GPU (`/dev/kgsl-3d0` + `a650_zap`)**: `/tmp/j22/gpu_test` succeeded with `rc=0`:
+    - `Opened /dev/kgsl-3d0 (fd=3)!`
+    - `Adreno 650 DEVICE_INFO: device_id=1 chip_id=0x06050002 gpu_id=0 mmu_enabled=1 gmem_size=1152 KiB`
+    - `KGSL VERSION: drv=3.14 dev=3.1`
+    - `qkx-pil: PAS_INIT_IMAGE pas_id=13 mdata_phys=0x00000001efc72000 size=6860 ret=0 scm_ret=0` -> `a650_zap: Brought out of reset`.
+  - Saved final `4.19` Stage 5 kernel diff to `patches/target-kernel-stage5.diff` and loader update in `loader/loader.c`. Ready to pivot to Linux 7.2 mainline (`overpressure/linux` + `quest2-steamos/kernel/linux72`).

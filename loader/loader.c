@@ -1255,13 +1255,16 @@ static int __maybe_unused qkx_execute(void)
 	put_device(usb_core);
 	usb_core = NULL;
 
-	/* Shut down ADSP/CDSP/SLPI via TrustZone PAS_SHUTDOWN BEFORE AOP QMP
-	 * disconnect, because pil_shutdown() calls pil_notify_aop(desc, "off"). */
+	/* Shut down ADSP/CDSP/SLPI/a650_zap via TrustZone PAS_SHUTDOWN BEFORE
+	 * AOP QMP disconnect, because pil_shutdown() calls pil_notify_aop(desc, "off")
+	 * and a650_zap occupies 0xfdd00000 inside linux,cma across kexec. */
 	if (shutdown_dsps) {
-		static const char * const dsp_names[] = { "adsp", "cdsp", "slpi" };
+		static const char * const dsp_names[] = {
+			"adsp", "cdsp", "slpi", "a650_zap"
+		};
 		unsigned int d;
 
-		qkx_phase(108, "shutting down ADSP/CDSP/SLPI via PIL", false);
+		qkx_phase(108, "shutting down ADSP/CDSP/SLPI/a650_zap via PIL", false);
 		for (d = 0; d < ARRAY_SIZE(dsp_names); d++) {
 			struct subsys_device *sdev = find_subsys_device(dsp_names[d]);
 			struct subsys_desc *sdesc;
