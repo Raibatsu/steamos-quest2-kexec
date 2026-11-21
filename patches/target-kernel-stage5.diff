@@ -1,0 +1,180 @@
+diff --git a/drivers/gpu/msm/adreno.c b/drivers/gpu/msm/adreno.c
+index 65e2f0dd..1a39d03c 100644
+--- a/drivers/gpu/msm/adreno.c
++++ b/drivers/gpu/msm/adreno.c
+@@ -1591,6 +1591,7 @@ static int adreno_probe(struct platform_device *pdev)
+ 		return -ENODEV;
+ 
+ 	status = adreno_of_get_power(adreno_dev, pdev);
++	pr_info("qkx-adreno: adreno_of_get_power=%d\n", status);
+ 	if (status) {
+ 		device->pdev = NULL;
+ 		return status;
+@@ -1602,6 +1603,7 @@ static int adreno_probe(struct platform_device *pdev)
+ 	 * needs GMU initialized.
+ 	 */
+ 	status = gmu_core_probe(device);
++	pr_info("qkx-adreno: gmu_core_probe=%d\n", status);
+ 	if (status) {
+ 		device->pdev = NULL;
+ 		return status;
+@@ -1642,6 +1644,7 @@ static int adreno_probe(struct platform_device *pdev)
+ 		kgsl_mmu_set_feature(device, KGSL_MMU_LLCC_ENABLE);
+ 
+ 	status = kgsl_device_platform_probe(device);
++	pr_info("qkx-adreno: kgsl_device_platform_probe=%d\n", status);
+ 	if (status) {
+ 		device->pdev = NULL;
+ 		return status;
+diff --git a/drivers/gpu/msm/kgsl_gmu_core.c b/drivers/gpu/msm/kgsl_gmu_core.c
+index fbf8eef6..40075bcf 100644
+--- a/drivers/gpu/msm/kgsl_gmu_core.c
++++ b/drivers/gpu/msm/kgsl_gmu_core.c
+@@ -53,7 +53,7 @@ int gmu_core_probe(struct kgsl_device *device)
+ 			ADRENO_GPMU) ? BIT(GMU_GPMU) : 0;
+ 
+ 	for (i = 0; i < ARRAY_SIZE(gmu_subtypes); i++) {
+-		node = of_find_compatible_node(device->pdev->dev.of_node,
++		node = of_find_compatible_node(NULL,
+ 				NULL, gmu_subtypes[i].compat);
+ 
+ 		if (node != NULL) {
+diff --git a/drivers/irqchip/irq-gic-v3.c b/drivers/irqchip/irq-gic-v3.c
+index 7525167d..541b1c54 100644
+--- a/drivers/irqchip/irq-gic-v3.c
++++ b/drivers/irqchip/irq-gic-v3.c
+@@ -515,6 +515,14 @@ static void __init gic_dist_init(void)
+ 
+ 	gic_dist_config(base, gic_data.irq_nr, gic_dist_wait_for_rwp);
+ 
++	/*
++	 * The common helper has disabled and deactivated SPIs. Clear inherited
++	 * pending state before enabling the distributor. An asserted level
++	 * source can remain pending; its producer still needs proper shutdown.
++	 */
++	for (i = 32; i < gic_data.irq_nr; i += 32)
++		writel_relaxed(~0, base + GICD_ICPENDR + i / 8);
++
+ 	/* Enable distributor with ARE, Group1 */
+ 	writel_relaxed(GICD_CTLR_ARE_NS | GICD_CTLR_ENABLE_G1A | GICD_CTLR_ENABLE_G1,
+ 		       base + GICD_CTLR);
+diff --git a/drivers/mailbox/msm_qmp.c b/drivers/mailbox/msm_qmp.c
+index 726f6567..ef8cc6f7 100644
+--- a/drivers/mailbox/msm_qmp.c
++++ b/drivers/mailbox/msm_qmp.c
+@@ -553,8 +553,6 @@ static void __qmp_rx_worker(struct qmp_mbox *mbox)
+ 			mbox->mcore_mbox_size = desc.mcore.mailbox_size;
+ 			mbox->mcore_mbox_offset = desc.mcore.mailbox_offset;
+ 		}
+-		init_mcore_state(mbox);
+-		mbox->local_state = LINK_NEGOTIATION;
+ 		mbox->rx_pkt.data = devm_kzalloc(mdev->dev,
+ 						 desc.ucore.mailbox_size,
+ 						 GFP_KERNEL);
+@@ -562,6 +560,17 @@ static void __qmp_rx_worker(struct qmp_mbox *mbox)
+ 			QMP_ERR(mdev->ilc, "Failed to allocate rx pkt\n");
+ 			break;
+ 		}
++		if (desc.mcore.link_state == QMP_MBOX_LINK_UP &&
++		    desc.mcore.link_state_ack == QMP_MBOX_LINK_UP &&
++		    desc.ucore.link_state == QMP_MBOX_LINK_UP) {
++			mbox->local_state = LINK_CONNECTED;
++			complete_all(&mbox->link_complete);
++			pr_info("qmp: warm-attached %s in LINK_CONNECTED\n",
++				mdev->name);
++			break;
++		}
++		init_mcore_state(mbox);
++		mbox->local_state = LINK_NEGOTIATION;
+ 		QMP_INFO(mdev->ilc, "Set to link negotiation\n");
+ 		send_irq(mdev);
+ 		break;
+diff --git a/drivers/net/wireless/cnss2/qmi.c b/drivers/net/wireless/cnss2/qmi.c
+index 4426a94f..a05c51d0 100644
+--- a/drivers/net/wireless/cnss2/qmi.c
++++ b/drivers/net/wireless/cnss2/qmi.c
+@@ -202,11 +202,7 @@ static int cnss_wlfw_host_cap_send_sync(struct cnss_plat_data *plat_priv)
+ 	}
+ 
+ 	req->num_clients_valid = 1;
+-	if (test_bit(ENABLE_DAEMON_SUPPORT,
+-		     &plat_priv->ctrl_params.quirks))
+-		req->num_clients = 2;
+-	else
+-		req->num_clients = 1;
++	req->num_clients = 1; /* Native Linux: no Android cnss-daemon */
+ 	cnss_pr_dbg("Number of clients is %d\n", req->num_clients);
+ 
+ 	req->wake_msi = cnss_bus_get_wake_irq(plat_priv);
+diff --git a/drivers/soc/qcom/msm_bus/msm_bus_fabric_rpmh.c b/drivers/soc/qcom/msm_bus/msm_bus_fabric_rpmh.c
+index 3a48c03a..d509129d 100644
+--- a/drivers/soc/qcom/msm_bus/msm_bus_fabric_rpmh.c
++++ b/drivers/soc/qcom/msm_bus/msm_bus_fabric_rpmh.c
+@@ -961,7 +961,7 @@ static int msm_bus_dev_init_qos(struct device *dev, void *data)
+ 
+ 	MSM_BUS_DBG("Device = %d", node_dev->node_info->id);
+ 
+-	if (node_dev->node_info->qos_params.defer_init_qos) {
++	if (node_dev->node_info->qos_params.defer_init_qos || true) {
+ 		node_dev->node_info->qos_params.defer_init_qos = false;
+ 		node_dev->node_info->defer_qos = true;
+ 		goto exit_init_qos;
+diff --git a/drivers/soc/qcom/watchdog_v2.c b/drivers/soc/qcom/watchdog_v2.c
+index d5787cce..7412f03e 100644
+--- a/drivers/soc/qcom/watchdog_v2.c
++++ b/drivers/soc/qcom/watchdog_v2.c
+@@ -15,6 +15,7 @@
+ #include <linux/kthread.h>
+ #include <linux/mutex.h>
+ #include <linux/sched.h>
++#include <linux/sched/debug.h>
+ #include <linux/interrupt.h>
+ #include <linux/irq.h>
+ #include <linux/percpu.h>
+@@ -399,6 +400,15 @@ static void pet_watchdog(struct msm_watchdog_data *wdog_dd)
+ 	if (slack_ns < wdog_dd->min_slack_ns)
+ 		wdog_dd->min_slack_ns = slack_ns;
+ 	wdog_dd->last_pet = time_ns;
++	{
++		static int qkx_pet_cnt;
++		if (++qkx_pet_cnt >= 2 && system_state < SYSTEM_RUNNING) {
++			pr_emerg("qkx: still SYSTEM_BOOTING at pet %d (t=%llu ms); dumping tasks\n",
++				 qkx_pet_cnt, time_ns / 1000000ULL);
++			show_state();
++			panic("qkx: stuck in SYSTEM_BOOTING");
++		}
++	}
+ }
+ 
+ static void keep_alive_response(void *info)
+diff --git a/drivers/usb/dwc3/dwc3-msm.c b/drivers/usb/dwc3/dwc3-msm.c
+index fb9eafcb..e8f8a452 100644
+--- a/drivers/usb/dwc3/dwc3-msm.c
++++ b/drivers/usb/dwc3/dwc3-msm.c
+@@ -3916,8 +3916,11 @@ static int dwc3_msm_probe(struct platform_device *pdev)
+ 		}
+ 	}
+ 
+-	/* Assumes dwc3 is the first DT child of dwc3-msm */
+-	dwc3_node = of_get_next_available_child(node, NULL);
++	/* Find the available DWC3 controller independently of DT ordering. */
++	for_each_available_child_of_node(node, dwc3_node) {
++		if (of_device_is_compatible(dwc3_node, "snps,dwc3"))
++			break;
++	}
+ 	if (!dwc3_node) {
+ 		dev_err(&pdev->dev, "failed to find dwc3 child\n");
+ 		ret = -ENODEV;
+diff --git a/kernel/hung_task.c b/kernel/hung_task.c
+index 11f10e01..da4e9691 100644
+--- a/kernel/hung_task.c
++++ b/kernel/hung_task.c
+@@ -48,7 +48,7 @@ int sysctl_hung_task_selective_monitoring = 1;
+ /*
+  * Zero means infinite timeout - no checking done:
+  */
+-unsigned long __read_mostly sysctl_hung_task_timeout_secs = CONFIG_DEFAULT_HUNG_TASK_TIMEOUT;
++unsigned long __read_mostly sysctl_hung_task_timeout_secs = 15;
+ 
+ /*
+  * Zero (default value) means use sysctl_hung_task_timeout_secs:

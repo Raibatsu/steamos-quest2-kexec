@@ -78,3 +78,16 @@ make -C /mnt/HDD/quest2-kexec-build/kernel-target-src \
 3. **Audio (`ADSP` + `Kona ALSA`)**:
    - All 12 DLKMs already load cleanly (`rc=0`).
    - Investigate why `echo 1 > /sys/kernel/boot_adsp/boot` gave `subsys-pil-tz 17300000.qcom,lpass: adsp: Initializing image failed(rc:-22)` (`PAS_INIT_IMAGE` `-EINVAL` — check if `adsp.mdt` / `PAS_ID` needs `initcall_blacklist=qseecom_init` removed or if TZ already has ADSP state / memory region issue).
+
+## Jump #17 Breakthroughs (BOTH Root Causes Found & Patched in `kernel-target-src`!)
+1. **GPU (`/dev/kgsl-3d0`) — ROOT CAUSE FOUND & FIXED**:
+   - Jump #17 printed `qkx-adreno: adreno_of_get_power=0`, `qkx-adreno: gmu_core_probe=-6` (`-ENXIO`).
+   - Root cause: `dtc -I fs` sorted `live-fdt.dtb` alphabetically, placing `qcom,gmu@3d6a000` *before* `qcom,kgsl-3d0@3d00000`. `kgsl_gmu_core.c:56` called `of_find_compatible_node(device->pdev->dev.of_node, NULL, "qcom,gpu-gmu")`, which only searches *after* `kgsl-3d0` and returned `NULL` -> `-ENXIO`.
+   - **Fix applied** in `kernel-target-src/drivers/gpu/msm/kgsl_gmu_core.c`: changed `device->pdev->dev.of_node` to `NULL` (search from root).
+2. **Wi-Fi (`wlan0` / QCA6390) — ROOT CAUSE FOUND & FIXED**:
+   - With `qrtr-ns` started *before* `insmod wlan.ko`, `cnss2` cleanly reached `QMI WLFW service connected` (`state: 0x11`, zero recovery!), sent `indication register` + `host capability`, and then timed out waiting for `FW_READY_IND` because `cnss2/qmi.c:207` sent `req->num_clients = 2` (`ENABLE_DAEMON_SUPPORT`), telling QCA6390 firmware to wait forever for Android's `cnss-daemon`!
+   - **Fix applied** in `kernel-target-src/drivers/net/wireless/cnss2/qmi.c`: set `req->num_clients = 1` (no Android `cnss-daemon`).
+3. **Next Step (Jump #18)**:
+   - Rebuild `target-out/arch/arm64/boot/Image` (now includes BOTH `kgsl_gmu_core.c` GPU fix AND `cnss2/qmi.c` `num_clients=1` Wi-Fi fix!).
+   - `reboot -f` from current Jump #17 (`10.42.0.2:23`) -> Horizon root -> push rebuilt `Image` + recomputed DTB -> fire Jump #18.
+   - On Jump #18: check `/dev/kgsl-3d0` (GPU!) AND start `/tmp/qrtr-ns` -> `insmod /tmp/wlan.ko` -> `wlan0` (Wi-Fi!)!
