@@ -15,21 +15,24 @@
 
 /*
  * Quest 2 JDI 1920x3664 portrait panel (rot=270):
- *  - eye 0 (Left Eye):  physical y in [0..1831]
- *  - eye 1 (Right Eye): physical y in [1832..3663]
+ *  - Because the panel is rotated 270° (top-of-view at px=0, bottom-of-view at px=1919),
+ *    physical y [0..1831] is on the RIGHT side of the headset (Right Eye, eye=1) and
+ *    physical y [1832..3663] is on the LEFT side of the headset (Left Eye, eye=0)!
  *  - Logical upright eye coordinates:
+ *      eye 0 = Left Eye  -> physical y_base = 1832
+ *      eye 1 = Right Eye -> physical y_base = 0
  *      lx in [0..1831] (left to right across eye)
  *      ly in [0..1919] (top to bottom in user's field of view)
  *    maps to:
  *      px = ly
- *      py = (eye ? 1832 : 0) + (1831 - lx)
+ *      py = (eye == 0 ? 1832 : 0) + (1831 - lx)
  */
 static inline void put_eye_px(uint32_t *fb, int stride_px, int eye, int lx, int ly, uint32_t color)
 {
     if ((unsigned)lx >= EYE_W || (unsigned)ly >= EYE_H)
         return;
     int px = ly;
-    int py = (eye ? 1832 : 0) + (EYE_W - 1 - lx);
+    int py = (eye == 0 ? 1832 : 0) + (EYE_W - 1 - lx);
     fb[py * stride_px + px] = color;
 }
 
