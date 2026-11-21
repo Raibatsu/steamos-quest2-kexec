@@ -2000,3 +2000,21 @@ shell over USB CDC-Ethernet on Meta Quest 2 (`hollywood`, Horizon
   `cdc_ether`, MAC `02:51:4b:58:00:01`).
 - DHCP assigned `10.42.0.1/24` to host (`10.42.0.2` on Quest 2) and TCP
   connection to `10.42.0.2:23` returned the live `/ # ` BusyBox root shell.
+
+### Stage 4 Full Sign-Off (Jump #13 — Live Shell Verification + Clean Return)
+- Isolated host USB Ethernet profile `quest2-usb` pinned to MAC
+  `02:51:4b:58:00:01` (`10.42.0.1/24`, `ipv4.never-default yes`) — host
+  internet on `enp34s0` remained 100% untouched.
+- Jump #13 (`payload_base=0x110000000`, `baseline/initramfs.gz`) booted in
+  ~4 s and auto-connected over `10.42.0.2:23`.
+- Verified live inside native Linux on Quest 2 (saved privately to
+  `private-captures/stage4-live-shell-proof.txt`):
+  - `Linux (none) 4.19.325-cip128-st12+ #5 SMP PREEMPT aarch64 GNU/Linux`
+  - `Mem: 5784 MB total, 5675 MB available`
+  - UFS storage: `/dev/sda1..9`, `/dev/sdb1..2`, `/dev/sdc1` enumerated live
+  - Power supply: `battery` (55%), `bq27z561-0`, `bms`, `usb`, `main`, `dc`
+  - Input: `/dev/input/event0`, `event1`; Thermal: `cooling_device0..3`
+  - Hot-plugged secondary CPUs live (`0-3` online before reboot)
+  - Clean `reboot -f` from inside Linux back to Horizon OS.
+
+**Stage 4 (First Recoverable Native Linux Boot) is COMPLETE.**
