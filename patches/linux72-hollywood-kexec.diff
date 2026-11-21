@@ -46,6 +46,24 @@ index 7b91d631d..4c7a30dca 100644
  
  	gmu_write(gmu, REG_A6XX_GMU_RSCC_CONTROL_REQ, BIT(1));
  
+diff --git a/drivers/gpu/drm/msm/adreno/a6xx_preempt.c b/drivers/gpu/drm/msm/adreno/a6xx_preempt.c
+index 1cf10e575..1c829cd1d 100644
+--- a/drivers/gpu/drm/msm/adreno/a6xx_preempt.c
++++ b/drivers/gpu/drm/msm/adreno/a6xx_preempt.c
+@@ -381,8 +381,11 @@ void a6xx_preempt_init(struct msm_gpu *gpu)
+ 			goto fail;
+ 	}
+ 
+-	/* TODO: make this configurable? */
+-	a6xx_gpu->preempt_level = 1;
++	/*
++	 * Adreno 650 (a6xx) hangs mid-frame at draw-call level (preempt_level = 1);
++	 * use ring-boundary preemption (preempt_level = 0) on a6xx and level 1 on a7xx+.
++	 */
++	a6xx_gpu->preempt_level = adreno_is_a7xx(adreno_gpu) ? 1 : 0;
+ 	a6xx_gpu->uses_gmem = 1;
+ 	a6xx_gpu->skip_save_restore = 1;
+ 
 diff --git a/drivers/gpu/drm/msm/adreno/adreno_device.c b/drivers/gpu/drm/msm/adreno/adreno_device.c
 index f92ef1a94..f179836af 100644
 --- a/drivers/gpu/drm/msm/adreno/adreno_device.c
