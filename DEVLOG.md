@@ -2081,3 +2081,17 @@ Bootargs:
   - **Wi-Fi (`QCA6390`)**: `insmod wlan.ko` succeeded (`rc=0`), enabled all 5 WLAN regulators + `WLAN_EN`, trained PCIe RC0, and booted QCA6390 over MHI to `MISSION_MODE(6)`. Built a 170-line static ARM64 `qrtr-ns` (Linux 4.19 has no in-kernel QRTR nameserver); once started, QCA6390 (`node 7 port 1`) announced `WLFW_SERVICE_ID_V01` (`svc=69`) and `cnss2` achieved **`QMI WLFW service connected`** (`Sending indication register message` + `Sending host capability message`). Because `wlan.ko` had been loaded before `qrtr-ns`, `cnss2` was already in `CNSS_DRIVER_RECOVERY` (`state: 0x611`); starting `qrtr-ns` *before* `insmod wlan.ko` on the next clean boot is the next test for live `wlan0`.
   - **Audio**: All 12 Kona audio DLKMs loaded cleanly (`rc=0`). Writing `1` to `/sys/kernel/boot_adsp/boot` invoked `subsys-pil-tz 17300000.qcom,lpass: adsp: loading from 0x8a100000 to 0x8be00000`, which returned `PAS_INIT_IMAGE rc=-22` (needs investigation).
   - **GPU (`kgsl-3d0`)**: Staged `a650_gmu.bin`, `a650_sqe.fw`, `a650_zap.*` in `/lib/firmware/`. Binding `3d00000.qcom,kgsl-3d0` steps through all 7 OPPs (`305–670 MHz`) and returns silently before creating `/dev/kgsl-3d0`; next step is instrumenting `adreno_probe()` to see the exact failing sub-call.
+
+## Stage 5 MILESTONE: `/dev/kgsl-3d0` Probed & Live QCA6390 `wlan0` Over-the-Air Wi-Fi Scan (Jump #18, 2026-11-21)
+
+- **Kexec Jump #18 (`payload_base=0x100000000`)**:
+  - Booted `4.19.325-cip128-st12+ #8 SMP PREEMPT` cleanly to USB Ethernet `10.42.0.2:23`.
+- **Adreno 650 GPU (`/dev/kgsl-3d0`) — Device Node & GMU Boot Verified**:
+  - Fixing `of_find_compatible_node(NULL, NULL, gmu_subtypes[i].compat)` in `drivers/gpu/msm/kgsl_gmu_core.c:56` resolved the alphabetical DTB ordering failure (`gmu_core_probe=-6`).
+  - On Jump #18, `gmu_core_probe=0` and `kgsl_device_platform_probe=0`; `/dev/kgsl-3d0` (`237, 0`) and `/sys/class/kgsl/kgsl-3d0/gpu_model` (`Adreno650v3`, `305000000` Hz) appeared at boot.
+  - Opening `/dev/kgsl-3d0` via `/tmp/gpu_test` loaded `a650_gmu.bin`, booted the GMU CM3, started HFI, and completed 8 HFI requests (`sequence 0..8`, including GPU frequency vote `req.freq=1, req.bw=255`), then timed out at `sequence 9` (`H2F_MSG_GX_BW_PERF_VOTE` `perf idx 255, bw idx 3`, `-110`) inside `kgsl_bus_scale_request()`.
+  - Patched `kgsl_pwrctrl.c` (`kgsl_bus_scale_request`) and `kgsl_gmu.c` (`gmu_start` / `gmu_suspend`) for Jump #19 to scale GPU DDR bandwidth through the AP RPMh bus client (`gmu->pcl`) instead of GMU HFI BW voting, and added `GFP_DMA32` + dcache flush + `PAS_SHUTDOWN_CMD` pre-clean retry in `subsys-pil-tz.c` (`pil_init_image_trusted`).
+- **QCA6390 Wi-Fi (`wlan0`) — Live Over-the-Air RF Scan Verified**:
+  - With `req->num_clients = 1` in `drivers/net/wireless/cnss2/qmi.c:205` and `/tmp/qrtr-ns` running before `insmod /tmp/wlan.ko`, `cnss2` and `wlan.ko` completed QMI WLFW handshake (`wma_wait_for_ready_event: FW ready event received`), registered `phy0`, and created `wlan0`, `p2p0`, `p2p1`, and `wifi-aware0`.
+  - `ip link set wlan0 up` succeeded (`rc=0`).
+  - Built and ran static ARM64 `/tmp/nl80211_scan` (`NL80211_CMD_TRIGGER_SCAN` + `NL80211_CMD_GET_SCAN` on `wlan0` `ifindex=10`): **discovered 12 live Wi-Fi access points (BSSs) over the air (`8496 bytes`, `rc=0`)**.

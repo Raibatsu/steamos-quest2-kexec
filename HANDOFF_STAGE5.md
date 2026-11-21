@@ -91,3 +91,11 @@ make -C /mnt/HDD/quest2-kexec-build/kernel-target-src \
    - Rebuild `target-out/arch/arm64/boot/Image` (now includes BOTH `kgsl_gmu_core.c` GPU fix AND `cnss2/qmi.c` `num_clients=1` Wi-Fi fix!).
    - `reboot -f` from current Jump #17 (`10.42.0.2:23`) -> Horizon root -> push rebuilt `Image` + recomputed DTB -> fire Jump #18.
    - On Jump #18: check `/dev/kgsl-3d0` (GPU!) AND start `/tmp/qrtr-ns` -> `insmod /tmp/wlan.ko` -> `wlan0` (Wi-Fi!)!
+
+## Jump #18 Verified Results & Jump #19 Patches (2026-11-21)
+- **Verified on Jump #18 (`payload_base=0x100000000`)**:
+  1. **GPU (`/dev/kgsl-3d0`)**: `gmu_core_probe=0`, `kgsl_device_platform_probe=0`, `/dev/kgsl-3d0` (`237, 0`) and `/sys/class/kgsl/kgsl-3d0/gpu_model` (`Adreno650v3`, `305000000` Hz) live! Opening `/dev/kgsl-3d0` booted GMU (`a650_gmu.bin`) and completed 8 HFI messages (`sequence 0..8`), timing out only at `sequence 9` (`H2F_MSG_GX_BW_PERF_VOTE` `perf idx 255, bw idx 3`) in `kgsl_bus_scale_request()`.
+  2. **Wi-Fi (`wlan0`)**: `qrtr-ns` + `insmod /tmp/wlan.ko` + `echo ON > /dev/wlan` + `ip link set wlan0 up` brought up `wlan0`, `p2p0`, `p2p1`, `wifi-aware0` (`phy0`). `/tmp/nl80211_scan` (`private-captures/nl80211_scan.c`) scanned **12 live Wi-Fi access points (BSSs)** (`8496 bytes`, `rc=0`) over the air!
+- **Patched for Jump #19 (saved in `patches/target-kernel-stage5.diff`)**:
+  - `drivers/gpu/msm/kgsl_pwrctrl.c` & `kgsl_gmu.c`: scale GPU DDR BW via AP RPMh bus client (`KGSL_GMU_DEVICE(device)->pcl`) instead of GMU HFI BW voting.
+  - `drivers/soc/qcom/subsys-pil-tz.c`: `GFP_DMA32` + `__flush_dcache_area` + `qkx-pil` logging + pre-clean `PAS_SHUTDOWN_CMD` retry if `PAS_INIT_IMAGE_CMD` fails (for `a650_zap` `pas_id=13` and `adsp` `pas_id=1`).
