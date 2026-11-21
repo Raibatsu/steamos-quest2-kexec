@@ -1960,3 +1960,43 @@ headset execution:
   physical roundtrip (`disabled SCTLR flags=0`)**, **live physical relocation
   loop on scratch page**, clean CPU1..7 restoration (`online=8`), SyncBoss
   resume, clean unload.
+
+## Stage 4 MILESTONE: First Native Linux Boot + USB Ethernet Root Shell (2026-11-21)
+
+Achieved the first recorded native Linux boot to PID 1 userspace and live root
+shell over USB CDC-Ethernet on Meta Quest 2 (`hollywood`, Horizon
+`52242990024200150`, stock kernel `4.19.325-cip128-st12-g49638c7a8637`).
+
+### Root Causes Diagnosed & Fixed (Jumps #1–#12)
+1. **PMIC warm-reset for `pstore` retention** (`loader/loader.c`): Stock PM8150
+   defaults to `PON_POWER_OFF_HARD_RESET` unless `qpnp_pon_system_pwr_off(PON_POWER_OFF_WARM_RESET)`
+   is called prior to the irreversible boundary. Arming it made `console-ramoops-0`
+   and `dmesg-ramoops-0` survive watchdog/panic resets reliably.
+2. **AOP QMP warm-attach** (`kernel-target-src/drivers/mailbox/msm_qmp.c`):
+   Eliminated the 5 s `qmp-aop-clk` `-EAGAIN` timeout by detecting an already
+   `QMP_MBOX_LINK_UP` handshake with AOP and transitioning directly to
+   `LINK_CONNECTED` (`qmp: warm-attached aop in LINK_CONNECTED` -> `Registered
+   clocks with AOP` in 8 ms).
+3. **Deferred `msm_bus` QoS init** (`kernel-target-src/drivers/soc/qcom/msm_bus/msm_bus_fabric_rpmh.c`):
+   Used Qualcomm's built-in `defer_qos = true` path during early probe to avoid
+   touching NOC QoS registers on clock-gated bus fabrics.
+4. **CPU idle / secondary CPU stall** (`bootargs`): `cpuidle.off=1 maxcpus=1`
+   bypassed Qualcomm `lpm-levels` post-kexec deep-sleep stalls.
+5. **`qseecom_probe()` hang** (`bootargs`): `initcall_blacklist=qseecom_init`
+   bypassed `qseecom_probe() -> kthread_stop()` deadlock (pinpointed via a
+   9.4 s `SYSTEM_BOOTING` `show_state()` diagnostic in `watchdog_v2.c`).
+6. **Live DSPs (`adsp`/`cdsp`) causing silent early resets on SMMU reset**:
+   Enabling our Stage 2 **`shutdown_dsps=1`** (`subsys_desc->shutdown(desc, true)`
+   -> TrustZone `PAS_SHUTDOWN_CMD` before AOP QMP disconnect) eliminated the
+   random silent hardware resets at `0.298 s` / `1.364 s`.
+
+### Jump #12 Observed Result
+- Kexec fired at `05:41:25` (`payload_base=0x100000000`, `shutdown_dsps=1`,
+  `clear_pci_master=1`, `suspend_syncboss=1`, `disconnect_qmp=1`,
+  `qmp_channels_only=1`, `flush_rpmh=1`, `preserve_watchdog=1`,
+  `watchdog_recovery=1`).
+- **4 seconds later (`05:41:29`)**: USB enumerated on host as
+  `1d6b:0105` (`Product: RAM-only USB Ethernet shell`, `SerialNumber: QKX-RAM`,
+  `cdc_ether`, MAC `02:51:4b:58:00:01`).
+- DHCP assigned `10.42.0.1/24` to host (`10.42.0.2` on Quest 2) and TCP
+  connection to `10.42.0.2:23` returned the live `/ # ` BusyBox root shell.

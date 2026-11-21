@@ -9,6 +9,7 @@
 #include <linux/delay.h>
 #include <linux/fs.h>
 #include <linux/init.h>
+#include <linux/input/qpnp-power-on.h>
 #include <linux/interrupt.h>
 #include <linux/ioport.h>
 #include <linux/io.h>
@@ -1211,6 +1212,12 @@ static int __maybe_unused qkx_execute(void)
 	/* Irreversible boundary: no return-to-apps path after PCIe/USB are stopped.
 	 * Watchdog and later shutdown operations cannot promise full rollback.
 	 */
+	if (watchdog_recovery) {
+		int wret = qpnp_pon_system_pwr_off(PON_POWER_OFF_WARM_RESET);
+
+		pr_emerg("quest_kexec: armed PMIC PON_POWER_OFF_WARM_RESET (ret=%d) for pstore retention\n",
+			 wret);
+	}
 	if (clear_pci_master) {
 		struct pci_dev *pdev = NULL;
 
@@ -1235,8 +1242,9 @@ static int __maybe_unused qkx_execute(void)
 		unsigned long flags;
 
 		spin_lock_irqsave(dwc_lock, flags);
-		ret = dwc3_run_stop_fn ? dwc3_run_stop_fn(dwc, 0, 0)
-				       : suspend_dwc3_gadget(dwc);
+		ret = dwc3_run_stop_fn ? dwc3_run_stop_fn(dwc, 0, 0) : 0;
+		if (!ret)
+			suspend_dwc3_gadget(dwc);
 		spin_unlock_irqrestore(dwc_lock, flags);
 		if (!ret && dwc_irq)
 			synchronize_irq(dwc_irq);
