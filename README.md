@@ -21,7 +21,7 @@ Measured on the headset (retail, locked bootloader, booted purely from RAM via `
 | Fan | ✅ PWM channel (LPG `0xbd00`) at 100 % duty: hottest sensor ~60 C under SteamVR (was 86-90 C without it) |
 | RAM given to Linux | ~3.0 GB at the first 4.5 GB claim attempt (dry runs reached 3.7 GB; see `NOTES.md`) |
 | Headset power/volume buttons | ✅ kernel events + `q2buttons` (needs the unit + device-name patch in `NOTES.md`) |
-| Touch controllers (6DoF radio) | ❌ not connecting yet: the SyncBoss radio returns no controller packets (open issue) |
+| Touch controllers (radio) | ✅ both paired controllers connect and stream (~500 Hz IMU each, buttons, stick, trigger/grip, battery); see the fix in `linux72/NOTES.md`. Positional 6DoF tracking (cameras) is not implemented yet |
 
 **What was wrong (so it can be reproduced or reused):** after kexec, Linux randomly hung a core (0.6 s to 60 s after boot, or ~9 s into SteamVR). The cause is not the GPU or idle states: Horizon's hypervisor/TrustZone leaves random 2 MiB RAM windows assigned away, and merely reading one hangs the core. The windows differ on every boot. **Fix:** the loader (`claim_mb=N`) hands Linux only RAM that Horizon itself can allocate or migrate, via a patched placeholder in the DTB memory node. Details, tools and operating notes: [`linux72/NOTES.md`](linux72/NOTES.md).
 

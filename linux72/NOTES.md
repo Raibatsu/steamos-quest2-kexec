@@ -41,6 +41,22 @@ overwrite it). Stage 1 has no kmsg forwarder; restart `host/kmsg_udp_recv.py` an
 - Bootargs: `rdinit=/init clk_ignore_unused pd_ignore_unused regulator_ignore_unused panic=5 reboot=w irqchip.gicv3_pseudo_nmi=1 nmi_watchdog=panic loglevel=7 printk.devkmsg=on console=tty0 fbcon=font:TER16x32 fbcon=rotate:3 drm_client_lib.active=fbdev`
 
 
+## FIXED (2026-11-25): controllers and the SyncBoss reopen wedge
+
+1. **Beacon payload.** The MCU's radio only enters beacon mode when `0x85` carries a payload byte: `[0x85, seq, 1, 0x01]`
+   (frame = type, seq, len, data). Empty `0x85` is acked with status 0 but `GET_DATA 0xd2` stays `0`; with payload `01` it reads `2` and
+   0x8f controller packets flow at ~500/s per controller. `/usr/bin/q2headtrack` line `bytes([0x85, 2, 0])` -> `bytes([0x85, 2, 1, 1])`.
+   (Backup: `q2headtrack.orig`.) The pairing list (`GET_DATA 0x7c`, 193 bytes, count 2 = left+right) was already on the MCU: no pairing needed.
+2. **`SET_DATA 0xd5` does not exist on the Quest 2 MCU** (replies -22, MCU log: `Unknown item set requested (item 213)`): Quest 1 only; do not send it.
+3. **Command replies come on `/dev/syncboss_control0`** (not the stream, not `/dev/syncboss0`), and MCU text logs arrive as type `0x92`
+   (`tools/sbprobe.py`, `tools/sbprobe2.py`).
+4. **Reopen wedge:** after the first close of `/dev/syncboss0` the MCU acked everything but never streamed IMU again until a Horizon boot.
+   Cause: the vendor driver's close drops the IMU (L7C 3.0 V) and mag (L8C 1.8 V) rails; in Quest OS other consumers keep them up, here
+   nothing does, so the next open pin-resets the MCU onto a cold IMU. Fix in the DTS: `regulator-always-on` + `regulator-boot-on` on both.
+   Verified: tracker restarted repeatedly and SteamVR stop/start no longer wedge it. (Driver unbind/rebind is still broken: the nsync misc
+   device is not removed, `-EEXIST` on rebind.)
+5. Headset battery/prox: unchanged. Controller firmware/pairing are untouched; nothing here pairs, unpairs or updates anything.
+
 ## UPDATE (2026-11-24 night): Linux->Linux kexec works; controller radio diagnosis
 
 - **Linux->Linux kexec (no Horizon, no Singularity) works.** The old `q2kexec` unbound the USB gadget and *then* called `sync()`; with the
