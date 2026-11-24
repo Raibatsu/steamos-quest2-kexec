@@ -513,7 +513,7 @@ index d3fad0fcf..525b35918 100644
  		.name	= "dwc3-qcom-legacy",
  		.pm	= &dwc3_qcom_dev_pm_ops,
 diff --git a/drivers/usb/gadget/function/u_ether.c b/drivers/usb/gadget/function/u_ether.c
-index 59d85d6a8..2204fb13b 100644
+index 59d85d6a8..1de6d65e2 100644
 --- a/drivers/usb/gadget/function/u_ether.c
 +++ b/drivers/usb/gadget/function/u_ether.c
 @@ -18,8 +18,10 @@
@@ -630,16 +630,17 @@ index 59d85d6a8..2204fb13b 100644
  	INIT_LIST_HEAD(&dev->tx_reqs);
  	INIT_LIST_HEAD(&dev->rx_reqs);
  
-@@ -808,6 +826,8 @@ struct eth_dev *gether_setup_name(struct usb_gadget *g,
+@@ -808,6 +826,9 @@ struct eth_dev *gether_setup_name(struct usb_gadget *g,
  		 *  - tx queueing enabled if open *and* carrier is "on"
  		 */
  		netif_carrier_off(net);
 +		dev->rx_wq = alloc_workqueue("u_ether_rx",
-+					     WQ_MEM_RECLAIM | WQ_HIGHPRI, 1);
++					     WQ_PERCPU | WQ_MEM_RECLAIM | WQ_HIGHPRI,
++					     1);
  	}
  
  	return dev;
-@@ -826,7 +846,7 @@ struct net_device *gether_setup_name_default(const char *netname)
+@@ -826,7 +847,7 @@ struct net_device *gether_setup_name_default(const char *netname)
  	dev = netdev_priv(net);
  	spin_lock_init(&dev->lock);
  	spin_lock_init(&dev->req_lock);
@@ -648,16 +649,17 @@ index 59d85d6a8..2204fb13b 100644
  	INIT_LIST_HEAD(&dev->tx_reqs);
  	INIT_LIST_HEAD(&dev->rx_reqs);
  
-@@ -883,6 +903,8 @@ int gether_register_netdev(struct net_device *net)
+@@ -883,6 +904,9 @@ int gether_register_netdev(struct net_device *net)
  		 *  - tx queueing enabled if open *and* carrier is "on"
  		 */
  		netif_carrier_off(net);
 +		dev->rx_wq = alloc_workqueue("u_ether_rx",
-+					     WQ_MEM_RECLAIM | WQ_HIGHPRI, 1);
++					     WQ_PERCPU | WQ_MEM_RECLAIM | WQ_HIGHPRI,
++					     1);
  	}
  
  	return status;
-@@ -1115,7 +1137,11 @@ void gether_cleanup(struct eth_dev *dev)
+@@ -1115,7 +1139,11 @@ void gether_cleanup(struct eth_dev *dev)
  		return;
  
  	unregister_netdev(dev->net);

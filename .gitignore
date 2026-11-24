@@ -34,3 +34,4 @@ loader/.*.cmd
 loader/Module.symvers
 loader/modules.order
 loader/.tmp_versions/
+__pycache__/

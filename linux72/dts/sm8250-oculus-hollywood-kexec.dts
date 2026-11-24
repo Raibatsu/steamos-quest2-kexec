@@ -31,23 +31,16 @@
 			no-map;
 		};
 
-		qseecom_ta_region@f8400000 {
-			reg = <0x0 0xf8400000 0x0 0x1000000>;
-			no-map;
-		};
-
-		sp_region@fa800000 {
-			reg = <0x0 0xfa800000 0x0 0x1000000>;
-			no-map;
-		};
-
-		qseecom_region@fc800000 {
-			reg = <0x0 0xfc800000 0x0 0x1400000>;
-			no-map;
-		};
-
-		mailbox_region@ffc00000 {
-			reg = <0x0 0xffc00000 0x0 0x20000>;
+		/*
+		 * Horizon OS reserves 0xec800000..0xffc1ffff contiguously for
+		 * secure_display, user_contig, sdsp, qseecom_ta, cnss_wlan
+		 * (XPU-locked to VMID_WLAN), sp, cdsp, adsp, qseecom, cma,
+		 * and mailbox. Mark the entire range no-map so Linux 7.2
+		 * (including SWIOTLB and buddy pages) never touches an
+		 * XPU/MSA-protected physical address across kexec.
+		 */
+		horizon_tz_cma_region@ec800000 {
+			reg = <0x0 0xec800000 0x0 0x13420000>;
 			no-map;
 		};
 	};

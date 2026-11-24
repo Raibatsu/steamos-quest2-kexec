@@ -58,6 +58,18 @@ static bool ram_diagnose;
 static unsigned long long ram_base;
 static unsigned long long ram_bytes;
 static unsigned long long payload_base;
+/* Linux RAM = destination + extra movable pageblocks claimed from Horizon. Pages Horizon can
+ * migrate/allocate are HLOS-accessible; the rest of RAM may hold hyp/TZ-protected 2 MiB windows
+ * that hang a core when Linux touches them after the jump. */
+#define QKX_MAX_EXTRA 250
+#define QKX_MEM_MAGIC0 0x51a0c0deU
+#define QKX_MEM_MAGIC1 0xc0de0000U
+#define QKX_MEM_ENTRIES 256
+static unsigned int claim_mb;
+static unsigned long long claim_lo = 0x80000000ULL, claim_hi = 0x200000000ULL;
+static struct { u64 lo, hi; } claimed[QKX_MAX_EXTRA];
+static unsigned int nr_claimed;
+static void (*release_extra)(unsigned long, unsigned int);
 static bool preserve_watchdog;
 static bool watchdog_recovery;
 static bool watchdog_control;
@@ -89,6 +101,10 @@ module_param(ram_base, ullong, 0);
 MODULE_PARM_DESC(ram_base, "Diagnostic base with validate_ram only; zero selects the original fixed window; never relocates payloads");
 module_param(ram_bytes, ullong, 0);
 MODULE_PARM_DESC(ram_bytes, "With validate_ram only: aligned claim length, maximum 64 MiB; zero retains 52 MiB");
+module_param(claim_mb, uint, 0);
+MODULE_PARM_DESC(claim_mb, "Extra movable RAM (MiB) to claim from Horizon and hand to Linux via the DTB memory node placeholder");
+module_param(claim_lo, ullong, 0);
+module_param(claim_hi, ullong, 0);
 module_param(payload_base, ullong, 0);
 MODULE_PARM_DESC(payload_base, "Hollywood compact staging base; zero retains legacy layout; does not enable handoff");
 module_param(preserve_watchdog, bool, 0);
@@ -551,6 +567,94 @@ static int qkx_claim_destination(void)
 	return 0;
 }
 
+/* Claim extra movable pageblocks (migrating Horizon's movable pages away). A block that holds
+ * a pinned/protected page cannot be isolated, so it is skipped and never read. */
+static int qkx_claim_extra(void)
+{
+	int (*claim)(unsigned long, unsigned long, unsigned int, gfp_t) =
+		(void *)lookup("alloc_contig_range");
+	void (*release)(unsigned long, unsigned int) =
+		(void *)lookup("free_contig_range");
+	unsigned long (*block_flags)(struct page *, unsigned long,
+				     unsigned long, unsigned long) =
+		(void *)lookup("get_pfnblock_flags_mask");
+	unsigned long step = max_t(unsigned long, MAX_ORDER_NR_PAGES, pageblock_nr_pages);
+	unsigned long dlo = destination_lo >> PAGE_SHIFT, dhi = destination_hi >> PAGE_SHIFT;
+	unsigned long end = claim_hi >> PAGE_SHIFT, pfn;
+	u64 target = (u64)claim_mb << 20, got = 0;
+	unsigned int tried = 0, failed = 0, i;
+
+	if (!claim || !release || !block_flags)
+		return -ENOENT;
+	release_extra = release;
+	for (pfn = ALIGN(claim_lo >> PAGE_SHIFT, step); pfn + step <= end && got < target; pfn += step) {
+		struct page *first, *last;
+		u64 lo = (u64)pfn << PAGE_SHIFT, hi = (u64)(pfn + step) << PAGE_SHIFT;
+
+		if (pfn < dhi && pfn + step > dlo)
+			continue;
+		if (!pfn_valid(pfn) || !pfn_valid(pfn + step - 1))
+			continue;
+		first = pfn_to_page(pfn);
+		last = pfn_to_page(pfn + step - 1);
+		if (PageReserved(first) || page_zone(first) != page_zone(last))
+			continue;
+		if (block_flags(first, pfn, PB_migrate_end, MIGRATETYPE_MASK) != MIGRATE_MOVABLE)
+			continue;
+		tried++;
+		if (claim(pfn, pfn + step, MIGRATE_MOVABLE, GFP_KERNEL)) {
+			failed++;
+			continue;
+		}
+		if (nr_claimed && claimed[nr_claimed - 1].hi == lo) {
+			claimed[nr_claimed - 1].hi = hi;
+		} else if (nr_claimed < QKX_MAX_EXTRA) {
+			claimed[nr_claimed].lo = lo;
+			claimed[nr_claimed].hi = hi;
+			nr_claimed++;
+		} else {
+			release(pfn, step);
+			break;
+		}
+		got += hi - lo;
+	}
+	pr_info("quest_kexec: extra claim: %llu MiB in %u range(s); %u blocks tried, %u refused\n",
+		got >> 20, nr_claimed, tried, failed);
+	for (i = 0; i < nr_claimed; i++)
+		pr_info("quest_kexec:   extra [%llx,%llx)\n", claimed[i].lo, claimed[i].hi);
+	return got >= (u64)256 << 20 ? 0 : -ENOMEM;
+}
+
+/* Rewrite the DTB memory node's placeholder reg (64 x <addr size>, tagged with a magic) to the
+ * real Linux RAM: the payload destination plus every claimed range. */
+static int qkx_patch_memory(u8 *b, u64 size)
+{
+	u64 i;
+	u8 *p = NULL;
+	unsigned int n = 0;
+
+	for (i = 0; i + 16 * QKX_MEM_ENTRIES <= size; i += 4) {
+		if (get_unaligned_be32(b + i) == QKX_MEM_MAGIC0 &&
+		    get_unaligned_be32(b + i + 4) == QKX_MEM_MAGIC1 &&
+		    get_unaligned_be32(b + i + 16 * (QKX_MEM_ENTRIES - 1)) == QKX_MEM_MAGIC0) {
+			p = b + i;
+			break;
+		}
+	}
+	if (!p)
+		return -ENOENT;
+	memset(p, 0, 16 * QKX_MEM_ENTRIES);
+	put_unaligned_be64(destination_lo, p);
+	put_unaligned_be64(destination_hi - destination_lo, p + 8);
+	n = 1;
+	for (i = 0; i < nr_claimed && n < QKX_MEM_ENTRIES; i++, n++) {
+		put_unaligned_be64(claimed[i].lo, p + 16 * n);
+		put_unaligned_be64(claimed[i].hi - claimed[i].lo, p + 16 * n + 8);
+	}
+	pr_info("quest_kexec: DTB memory node patched with %u range(s)\n", n);
+	return 0;
+}
+
 /* Hold rejected pages until unload: do not allocate/free the same page forever. */
 static void *qkx_page(void)
 {
@@ -695,6 +799,12 @@ static void qkx_release(void)
 	vfree(owned);
 	owned = NULL;
 	first_desc = last_desc = NULL;
+	while (nr_claimed) {
+		nr_claimed--;
+		if (release_extra)
+			release_extra(claimed[nr_claimed].lo >> PAGE_SHIFT,
+				      (claimed[nr_claimed].hi - claimed[nr_claimed].lo) >> PAGE_SHIFT);
+	}
 	if (destination_owned) {
 		release_destination(destination_lo >> PAGE_SHIFT,
 			(destination_hi - destination_lo) >> PAGE_SHIFT);
@@ -1320,7 +1430,22 @@ static int __maybe_unused qkx_execute(void)
 	/* migrate_to_reboot_cpu() disables hotplug; native kernel_kexec()
 	 * reenables it immediately before machine_shutdown(). */
 	hotplug_enable();
-	/* Preserve pending-wakeup evidence for native secondary-CPU refusal. */
+	/* Past the point of no return: Horizon will never resume. A wakeup event
+	 * that arrived since the suspend service armed events_check_enabled
+	 * (USB/charger/prox noise) makes freeze_secondary_cpus() abort with
+	 * "Wakeup pending. Abort CPU freeze" and this module then panics. Clear
+	 * the PM wakeup-abort state so the CPU offline cannot be vetoed by it. */
+	{
+		bool *evchk = (void *)lookup("events_check_enabled");
+		atomic_t *pmabort = (void *)lookup("pm_abort_suspend");
+
+		if (evchk)
+			WRITE_ONCE(*evchk, false);
+		if (pmabort)
+			atomic_set(pmabort, 0);
+		pr_emerg("quest_kexec: cleared PM wakeup-abort state (events_check_enabled %s, pm_abort_suspend %s)\n",
+			 evchk ? "found" : "MISSING", pmabort ? "found" : "MISSING");
+	}
 	qkx_phase(13, "calling native machine_shutdown", false);
 	shutdown_cpus();
 	qkx_phase(14, "native machine_shutdown returned", false);
@@ -1527,6 +1652,8 @@ static int __init qkx_init(void)
 		return -EINVAL;
 	if (payload_base && validate_ram)
 		return -EINVAL;
+	if (claim_mb && (!payload_base || claim_mb > 4096))
+		return -EINVAL;
 	if (validate_ram && (execute || preserve_watchdog || watchdog_recovery ||
 	    watchdog_control || test_transition || test_full_copy || test_cpus ||
 	    phase_delay_ms || post_shutdown_probe || preflight_only ||
@@ -1629,6 +1756,11 @@ static int __init qkx_init(void)
 		if (ret)
 			goto out;
 	}
+	if (claim_mb) {
+		ret = qkx_claim_extra();
+		if (ret)
+			goto out;
+	}
 	owned = vzalloc(QKX_MAX_PAGES * sizeof(*owned));
 	if (!owned) {
 		ret = -ENOMEM;
@@ -1640,6 +1772,7 @@ static int __init qkx_init(void)
 		pos = 0;
 		ret = qkx_read(df, dbuf, dsize, &pos);
 		if (!ret) ret = qkx_check_dtb(dbuf, dsize, rsize);
+		if (!ret && claim_mb) ret = qkx_patch_memory(dbuf, dsize);
 		if (ret) goto out;
 	}
 	ret = qkx_stage(kf, payload_entry, ksize, PAGE_ALIGN(image_size), NULL);
