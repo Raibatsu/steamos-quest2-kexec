@@ -1,15 +1,23 @@
 #!/bin/bash
-# Build boot-<base>-claim.dtb from the packed boot-<base>-linux72.dtb: replace the memory node's reg with a
-# 256-entry placeholder (each entry = 51a0c0de c0de0000 0 0) that loader.c (claim_mb=N) overwrites at insmod time
-# with the payload destination + the RAM ranges it claimed from Horizon. Usage: make_claim_dtbs.sh <outdir> [extra bootarg]
+# Build boot-<base>-<suffix>.dtb for every payload base from the kernel's kexec DTB:
+#  - linux,initrd-start/end for payload_base + rd (rd = PAGE_ALIGN(text_offset + Image header memory size), read from the Image)
+#  - the memory node's reg replaced by a 1024-entry placeholder (each entry 51a0c0de c0de0000 0 0) that loader.c
+#    (claim_mb=N) overwrites at insmod time with the payload destination + the RAM ranges it claimed from Horizon.
+# usage: make_claim_dtbs.sh <sm8250-oculus-hollywood-kexec.dtb> <Image> <initramfs.cpio.gz> <outdir> [suffix=fan] [extra bootarg]
 set -e
-OUT=${1:-/mnt/HDD/quest2-linux72/out}; EXTRA=$2
-cells=$(python3 -I -c 'print(" ".join(["51a0c0de","c0de0000","0","0"]*256))')
+DTB=$1; IMG=$2; RD=$3; OUT=$4; SUF=${5:-fan}; EXTRA=$6
+RS=$(stat -c %s "$RD")
+RDOFF=$(python3 -I -c "
+import struct,sys
+b=open('$IMG','rb').read(64); off,size=struct.unpack_from('<QQ',b,8); print((off+size+4095)&~4095)")
+cells=$(python3 -I -c 'print(" ".join(["51a0c0de","c0de0000","0","0"]*1024))')
+mkdir -p "$OUT"
 for b in 100 130 140 160 180; do
-  cp "$OUT/boot-$b-linux72.dtb" "$OUT/boot-$b-claim.dtb"
-  fdtput -t x "$OUT/boot-$b-claim.dtb" /memory@80000000 reg $cells
-  if [ -n "$EXTRA" ]; then
-    cur=$(fdtget "$OUT/boot-$b-claim.dtb" /chosen bootargs)
-    fdtput -ts "$OUT/boot-$b-claim.dtb" /chosen bootargs "$cur $EXTRA"
-  fi
+  f="$OUT/boot-$b-$SUF.dtb"; cp "$DTB" "$f"
+  s=$((0x${b}000000 + RDOFF)); e=$((s + RS))
+  fdtput -t u "$f" /chosen linux,initrd-start $((s>>32)) $((s&0xffffffff))
+  fdtput -t u "$f" /chosen linux,initrd-end $((e>>32)) $((e&0xffffffff))
+  fdtput -t x "$f" /memory@80000000 reg $cells
+  if [ -n "$EXTRA" ]; then cur=$(fdtget "$f" /chosen bootargs); fdtput -ts "$f" /chosen bootargs "$cur $EXTRA"; fi
 done
+echo "rd offset $(printf '%#x' $RDOFF), initramfs $RS bytes"

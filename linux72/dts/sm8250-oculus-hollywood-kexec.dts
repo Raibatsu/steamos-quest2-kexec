@@ -8,6 +8,7 @@
  * - Supplies kexec bootargs (panic=5 for automatic pstore-preserving warm reboot).
  */
 
+#include <dt-bindings/pinctrl/qcom,pmic-gpio.h>
 #include "sm8250-oculus-hollywood.dts"
 
 / {
@@ -89,6 +90,29 @@
 		reg = <0x4 SPMI_USID>;
 		#address-cells = <1>;
 		#size-cells = <0>;
+
+		pm8150l_gpios: gpio@c000 {
+			compatible = "qcom,pm8150l-gpio", "qcom,spmi-gpio";
+			reg = <0xc000>;
+			gpio-controller;
+			gpio-ranges = <&pm8150l_gpios 0 0 12>;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+			/* pads 2, 9 and 12 are owned by other subsystems on this board (Quest OS: gpios-disallowed) */
+			gpio-reserved-ranges = <1 1>, <8 1>, <11 1>;
+
+			/* Fan PWM pad: LPG channel at 0xbd00 (Quest OS's "pm8150l_pwm 1"; PM8150L gpios live on SID 4, its LPG on SID 5). */
+			fan_pwm_default: fan-pwm-default-state {
+				pins = "gpio10";
+				function = "func1";
+				bias-disable;
+				power-source = <1>;
+				output-low;
+				qcom,drive-strength = <PMIC_GPIO_STRENGTH_HIGH>;
+				drive-push-pull;
+			};
+		};
 	};
 
 	pmic@5 {
@@ -104,6 +128,26 @@
 			regulator-min-microvolt = <5700000>;
 			regulator-max-microvolt = <5700000>;
 		};
+
+		pm8150l_lpg: pwm {
+			compatible = "qcom,pm8150l-lpg";
+			#address-cells = <1>;
+			#size-cells = <0>;
+			#pwm-cells = <2>;
+		};
+	};
+};
+
+/ {
+	/* The headset's PWM fan (25 kHz, tach on tlmm 64). pwm-fan starts it at full speed. */
+	fan: pwm-fan {
+		compatible = "pwm-fan";
+		pwms = <&pm8150l_lpg 4 40000>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&fan_pwm_default &fan_tach_default>;
+		interrupts-extended = <&tlmm 64 IRQ_TYPE_EDGE_FALLING>;
+		pulses-per-revolution = <2>;
+		cooling-levels = <0 36 73 109 146 182 219 255>;
 	};
 };
 
@@ -116,6 +160,14 @@
 };
 
 &tlmm {
+	fan_tach_default: fan-tach-default-state {
+		pins = "gpio64";
+		function = "gpio";
+		drive-strength = <4>;
+		bias-pull-up;
+		input-enable;
+	};
+
 	syncboss_pins: syncboss-default-state {
 		reset-pins {
 			pins = "gpio5";

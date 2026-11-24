@@ -8,6 +8,25 @@
 
 ---
 
+## ✅ Status (2026-11-24): Linux 7.2 + SteamOS + SteamVR boot and run stably on the locked Quest 2
+
+Measured on the headset (retail, locked bootloader, booted purely from RAM via `quest_kexec.ko`; Meta's boot/UFS partitions untouched):
+
+| Check | Result |
+| :--- | :--- |
+| Boot into Linux 7.2.0-hollywood+ (kexec from Horizon OS) | ✅ Stage 1 (USB NCM + telnet) up in ~2 s, Stage 2 SteamOS root over NBD |
+| Full-RAM sweep of every page Linux owns (`linux72/tools/q2memprobe.c`) | ✅ 0 bad windows, 8/8 CPUs alive (before the fix: 2-5 bad windows per boot, then a hard hang) |
+| Staged SteamVR escalation S0-S8 (`q2exp_stages.sh`) | ✅ all 9 stages clean, ending on the full original config (vrdirect, async compositor, hiprio, flushall, CAP_SYS_NICE, 90 Hz) |
+| SteamVR on the panel | ✅ ~80 flips/s zero-copy, ~10 ms frame-ready-to-panel, 0 replaced frames; 6+ min soak, no freeze |
+| Fan | ✅ PWM channel (LPG `0xbd00`) at 100 % duty: hottest sensor ~60 C under SteamVR (was 86-90 C without it) |
+| RAM given to Linux | ~3.0 GB at the first 4.5 GB claim attempt (dry runs reached 3.7 GB; see `NOTES.md`) |
+| Headset power/volume buttons | ✅ kernel events + `q2buttons` (needs the unit + device-name patch in `NOTES.md`) |
+| Touch controllers (6DoF radio) | ❌ not connecting yet: the SyncBoss radio returns no controller packets (open issue) |
+
+**What was wrong (so it can be reproduced or reused):** after kexec, Linux randomly hung a core (0.6 s to 60 s after boot, or ~9 s into SteamVR). The cause is not the GPU or idle states: Horizon's hypervisor/TrustZone leaves random 2 MiB RAM windows assigned away, and merely reading one hangs the core. The windows differ on every boot. **Fix:** the loader (`claim_mb=N`) hands Linux only RAM that Horizon itself can allocate or migrate, via a patched placeholder in the DTB memory node. Details, tools and operating notes: [`linux72/NOTES.md`](linux72/NOTES.md).
+
+---
+
 ## 📊 Hardware Bring-Up Progress (Live-Verified on Retail Locked Quest 2)
 
 | Subsystem | Kernel 4.19 (Stage 5) | Mainline Linux 7.2 (`7.2.0-hollywood+`) | Details / Driver |

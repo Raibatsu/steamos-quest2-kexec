@@ -61,11 +61,13 @@ static unsigned long long payload_base;
 /* Linux RAM = destination + extra movable pageblocks claimed from Horizon. Pages Horizon can
  * migrate/allocate are HLOS-accessible; the rest of RAM may hold hyp/TZ-protected 2 MiB windows
  * that hang a core when Linux touches them after the jump. */
-#define QKX_MAX_EXTRA 250
+#define QKX_MAX_EXTRA 1000
 #define QKX_MEM_MAGIC0 0x51a0c0deU
 #define QKX_MEM_MAGIC1 0xc0de0000U
-#define QKX_MEM_ENTRIES 256
+#define QKX_MEM_ENTRIES 1024
 static unsigned int claim_mb;
+static unsigned int claim_step_kb = 4096;
+static bool claim_relax;
 static unsigned long long claim_lo = 0x80000000ULL, claim_hi = 0x200000000ULL;
 static struct { u64 lo, hi; } claimed[QKX_MAX_EXTRA];
 static unsigned int nr_claimed;
@@ -103,6 +105,10 @@ module_param(ram_bytes, ullong, 0);
 MODULE_PARM_DESC(ram_bytes, "With validate_ram only: aligned claim length, maximum 64 MiB; zero retains 52 MiB");
 module_param(claim_mb, uint, 0);
 MODULE_PARM_DESC(claim_mb, "Extra movable RAM (MiB) to claim from Horizon and hand to Linux via the DTB memory node placeholder");
+module_param(claim_step_kb, uint, 0);
+MODULE_PARM_DESC(claim_step_kb, "Claim granularity in KiB (power of two, 2048..4096); 2048 recovers free 2 MiB halves of refused pageblocks");
+module_param(claim_relax, bool, 0);
+MODULE_PARM_DESC(claim_relax, "Also try UNMOVABLE/RECLAIMABLE pageblocks (never CMA); pinned or in-use pages still make alloc_contig_range refuse");
 module_param(claim_lo, ullong, 0);
 module_param(claim_hi, ullong, 0);
 module_param(payload_base, ullong, 0);
@@ -578,14 +584,17 @@ static int qkx_claim_extra(void)
 	unsigned long (*block_flags)(struct page *, unsigned long,
 				     unsigned long, unsigned long) =
 		(void *)lookup("get_pfnblock_flags_mask");
-	unsigned long step = max_t(unsigned long, MAX_ORDER_NR_PAGES, pageblock_nr_pages);
+	unsigned long step = (unsigned long)claim_step_kb >> (PAGE_SHIFT - 10);
 	unsigned long dlo = destination_lo >> PAGE_SHIFT, dhi = destination_hi >> PAGE_SHIFT;
 	unsigned long end = claim_hi >> PAGE_SHIFT, pfn;
+	unsigned long type;
 	u64 target = (u64)claim_mb << 20, got = 0;
 	unsigned int tried = 0, failed = 0, i;
 
 	if (!claim || !release || !block_flags)
 		return -ENOENT;
+	if (claim_step_kb < 2048 || claim_step_kb > 4096 || (claim_step_kb & (claim_step_kb - 1)))
+		return -EINVAL;
 	release_extra = release;
 	for (pfn = ALIGN(claim_lo >> PAGE_SHIFT, step); pfn + step <= end && got < target; pfn += step) {
 		struct page *first, *last;
@@ -599,7 +608,9 @@ static int qkx_claim_extra(void)
 		last = pfn_to_page(pfn + step - 1);
 		if (PageReserved(first) || page_zone(first) != page_zone(last))
 			continue;
-		if (block_flags(first, pfn, PB_migrate_end, MIGRATETYPE_MASK) != MIGRATE_MOVABLE)
+		type = block_flags(first, pfn, PB_migrate_end, MIGRATETYPE_MASK);
+		if (type != MIGRATE_MOVABLE &&
+		    !(claim_relax && (type == MIGRATE_UNMOVABLE || type == MIGRATE_RECLAIMABLE)))
 			continue;
 		tried++;
 		if (claim(pfn, pfn + step, MIGRATE_MOVABLE, GFP_KERNEL)) {
@@ -1652,7 +1663,7 @@ static int __init qkx_init(void)
 		return -EINVAL;
 	if (payload_base && validate_ram)
 		return -EINVAL;
-	if (claim_mb && (!payload_base || claim_mb > 4096))
+	if (claim_mb && (!payload_base || claim_mb > 5120))
 		return -EINVAL;
 	if (validate_ram && (execute || preserve_watchdog || watchdog_recovery ||
 	    watchdog_control || test_transition || test_full_copy || test_cpus ||

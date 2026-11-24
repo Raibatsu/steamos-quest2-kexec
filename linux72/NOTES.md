@@ -40,6 +40,35 @@ overwrite it). Stage 1 has no kmsg forwarder; restart `host/kmsg_udp_recv.py` an
 - `host/`: `nbd_server.py` (`10.42.0.1:10809`) and `kmsg_udp_recv.py` (`10.42.0.1:6666` live `/dev/kmsg`).
 - Bootargs: `rdinit=/init clk_ignore_unused pd_ignore_unused regulator_ignore_unused panic=5 reboot=w irqchip.gicv3_pseudo_nmi=1 nmi_watchdog=panic loglevel=7 printk.devkmsg=on console=tty0 fbcon=font:TER16x32 fbcon=rotate:3 drm_client_lib.active=fbdev`
 
+
+## UPDATE (2026-11-24 evening): RAM size, fan, buttons, controllers
+
+- **RAM:** `kxc.sh <MB> dry` first. With Horizon's apps killed and caches dropped, 4 MiB-granular claims (`claim_step_kb=4096`,
+  `claim_relax=1`) reached ~3.7 GB in dry runs (167 ranges); the real jump gave Linux ~3.0 GB. 2 MiB steps are *worse*: once
+  the first half of a pageblock is claimed, `alloc_contig_range` refuses the second. Needs the kernel patch
+  `INIT_MEMBLOCK_REGIONS 2048` (mm/memblock.c): arm64 only enables memblock resizing in `paging_init()`, after the DTB memory
+  node is parsed, so >128 memory ranges were silently dropped. That patch grows the Image header size, so `rd` moves
+  (0x33a0000 -> 0x33b0000): `make_claim_dtbs.sh` reads it from the Image. Further RAM is limited by ~450 pageblocks holding
+  pinned/unmovable pages in Horizon's kernel; stopping Android's framework gained <100 MB.
+- **Fan:** PM8150L PWM fan, LPG channel index 4 (`0xbd00`, Quest OS `pm8150l_pwm 1`), pad gpio10 `func1`, tach gpio64. The PM8150L
+  GPIO controller is on **SID 4** (LPG on SID 5): putting it on SID 5 gives `read 0x4 failed` and the `pwm-fan` stays deferred.
+  Stopgap that works with no DT change: `echo 4 > /sys/class/pwm/pwmchip0/export; echo 40000 > pwm4/period; echo 40000 > pwm4/duty_cycle; echo 1 > pwm4/enable`
+  (the pad mux Horizon left in the PMIC survives kexec). The DTS now also reserves gpio pads 2/9/12 (Quest OS `gpios-disallowed`);
+  the SID 4 version is built but not yet booted.
+- **Thermals:** `performance` governor + `cpuidle.off=1` (diagnostic settings) reached 90 C and a UFS/SError panic. Use `schedutil`
+  and normal idle states, keep the fan at 100 %.
+- **Headset buttons:** the NBD Stage 2 setup masks `q2-buttons.service` and sets `/var/lib/q2/nobuttons`. To enable: remove the flag,
+  install the unit text from `stage2_prep.sh`, add `HandlePowerKey=ignore` in `logind.conf.d`, and extend `q2buttons`' device match
+  with `pm8941_pwrkey` / `pm8941_resin` (this kernel names them so; volume-down arrives as `pm8941_resin`). Volume has no effect
+  until audio works.
+- **Controllers (open):** the tracker sends beacon command `0x85` every 20 s and gets only IMU packets (types 01/50), never `0x8f`
+  controller packets. Linux's SyncBoss driver pin-resets the MCU when first opened, and the services that Horizon's pairing may
+  depend on (`trackingservice`) were stopped before the jump (no longer needed since the claim approach). Next test: jump without
+  stopping Horizon's tracking services and compare.
+- **Rootfs gotchas:** unit fixes written in Stage 2 land in a RAM overlay of `/etc`; fix on-disk files from Stage 1 while the NBD root
+  is mounted. `q2-headtrack.service` is `->/dev/null` on disk from an earlier mask and must be restored from the text in
+  `stage2_prep.sh`.
+
 ---
 
 ## Verified Working on Mainline Linux 7.2

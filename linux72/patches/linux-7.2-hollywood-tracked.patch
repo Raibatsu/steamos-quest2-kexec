@@ -694,3 +694,16 @@ index d743884e2..b77d4dbb8 100644
  	.driver	= {
  		.name		= KBUILD_MODNAME,
  		.of_match_table	= qcom_wdt_of_table,
+diff --git a/mm/memblock.c b/mm/memblock.c
+index 6349c4815..46e86d5f4 100644
+--- a/mm/memblock.c
++++ b/mm/memblock.c
+@@ -30,7 +30,7 @@
+ 
+ #include "internal.h"
+ 
+-#define INIT_MEMBLOCK_REGIONS			128
++#define INIT_MEMBLOCK_REGIONS			2048
+ #define INIT_PHYSMEM_REGIONS			4
+ 
+ #ifndef INIT_MEMBLOCK_RESERVED_REGIONS
