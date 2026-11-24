@@ -41,6 +41,25 @@ overwrite it). Stage 1 has no kmsg forwarder; restart `host/kmsg_udp_recv.py` an
 - Bootargs: `rdinit=/init clk_ignore_unused pd_ignore_unused regulator_ignore_unused panic=5 reboot=w irqchip.gicv3_pseudo_nmi=1 nmi_watchdog=panic loglevel=7 printk.devkmsg=on console=tty0 fbcon=font:TER16x32 fbcon=rotate:3 drm_client_lib.active=fbdev`
 
 
+## UPDATE (2026-11-24 night): Linux->Linux kexec works; controller radio diagnosis
+
+- **Linux->Linux kexec (no Horizon, no Singularity) works.** The old `q2kexec` unbound the USB gadget and *then* called `sync()`; with the
+  Stage 2 root on NBD over that same USB link, btrfs commit blocked forever (`nbd0: Possible stuck request`) until hung-task reset.
+  Fixed: sync first, then unbind. New option `-B <hex base>` places the kernel inside RAM claimed by the loader. Flow: fetch the running
+  kernel's `/sys/firmware/fdt`, `tools/make_q2kexec_dtb.py live.dtb kexec.dtb Image initrd out.dtb` (prints the base), then
+  `q2kexec -l -B <base> -D out.dtb Image initrd` (load-only check) and `q2kexec -B <base> -D out.dtb Image initrd`. New kernel is back in ~4 s.
+- **DT fan verified:** `pwmfan` hwmon, pwm1=255, tach ~9500 RPM, with the PM8150L GPIO controller on SID 4 and pads 2/9/12 reserved.
+- **Controllers (still open).** Reference (nicolas-riera/quest1-steamos controllers-native.md, Quest 1 static analysis): the pairing list is
+  on the MCU (get_data 0x7c), beacon mode state is get_data 0xd2 (2 = beacon), and the vendor `input_start` first does set_data 0xd5 = 0,
+  then beacon cmd 0x85; data only decodes in beacon mode, and controller packets are dropped silently if the controller firmware does not match
+  the library's expectation (LCON app 1.17.2 / SPL 1.13.0 for Quest 1). Frames on /dev/syncboss0: {type, seq, len, data}; GET_DATA=2, SET_DATA=3.
+  `tools/sbprobe.py` reads 0xd2/0x7c, sets 0xd5=0, starts beacon and dumps non-IMU records. Never sends pair/unpair (0xd1).
+  Tested so far: leaving Horizon's trackingservice running before the jump does NOT make controllers appear.
+- **SyncBoss wedge:** after stopping SteamVR + the tracker, every later open gets an MCU that acknowledges transactions (spi/ready IRQs rise,
+  stats show only empty transactions) but streams no IMU records, even on a fresh kernel (kexec) and with `control/reset`. Driver unbind/rebind is
+  broken (`failed to register nsync misc device, error -17`: nsync misc device not removed on unbind). Only a Horizon boot has recovered the MCU
+  so far. Run `sbprobe.py` FIRST after a Horizon->Linux jump, before SteamVR or the tracker have touched the MCU.
+
 ## UPDATE (2026-11-24 evening): RAM size, fan, buttons, controllers
 
 - **RAM:** `kxc.sh <MB> dry` first. With Horizon's apps killed and caches dropped, 4 MiB-granular claims (`claim_step_kb=4096`,

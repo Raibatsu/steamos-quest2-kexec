@@ -32,7 +32,7 @@ static void usage(const char *prog)
 	fprintf(stderr,
 		"usage:\n"
 		"  %s [-d] [-n] [-l] [-K] <Image> <initrd|-> [cmdline]\n"
-		"  %s [-l] [-K] -D <dtb> <Image> <initrd|->\n"
+		"  %s [-l] [-K] [-B <hex phys base>] -D <dtb> <Image> <initrd|->\n"
 		"  %s -e [-K]\n"
 		"  %s -u\n",
 		prog, prog, prog, prog);
@@ -97,6 +97,8 @@ struct arm64_trampoline {
 	uint64_t addrs[2];
 };
 
+static uint64_t kexec_base = 0x90600000ULL;   /* physical base for the loaded kernel; -B overrides (must be 2 MiB aligned, inside owned RAM) */
+
 static int load_with_dtb(const char *kpath, const char *rpath, const char *dpath)
 {
 	uint8_t *kbuf = NULL, *rbuf = NULL, *dbuf = NULL;
@@ -137,7 +139,7 @@ static int load_with_dtb(const char *kpath, const char *rpath, const char *dpath
 		goto out;
 	}
 
-	kernel_phys = 0x90600000ULL + text_offset;
+	kernel_phys = kexec_base + text_offset;
 	kernel_memsz = align_up_u64(image_size, 4096);
 	initrd_phys = kernel_phys + kernel_memsz;
 	if (rbuf)
@@ -238,7 +240,7 @@ int main(int argc, char **argv)
 	unsigned long flags = 0;
 	unsigned long clen;
 
-	while ((opt = getopt(argc, argv, "+dnleuKD:")) != -1) {
+	while ((opt = getopt(argc, argv, "+dnleuKD:B:")) != -1) {
 		switch (opt) {
 		case 'd':
 			flags |= KEXEC_FILE_DEBUG;
@@ -260,6 +262,9 @@ int main(int argc, char **argv)
 			break;
 		case 'D':
 			dpath = optarg;
+			break;
+		case 'B':
+			kexec_base = strtoull(optarg, NULL, 16);
 			break;
 		default:
 			usage(argv[0]);
@@ -372,13 +377,15 @@ int main(int argc, char **argv)
 do_exec:
 	signal(SIGHUP, SIG_IGN);
 	signal(SIGPIPE, SIG_IGN);
+	/* Flush BEFORE the USB gadget goes away: with the root filesystem on NBD over that same USB link
+	 * (Stage 2), a sync() after the unbind blocks forever on writes that can no longer complete. */
+	sync();
 	if (!skip_usb_unbind) {
 		write_sysfs("/sys/kernel/config/usb_gadget/q2/UDC", "\n");
 		write_sysfs("/sys/bus/platform/drivers/dwc3-qcom-legacy/unbind",
 			    "a6f8800.usb");
 		usleep(100000);
 	}
-	sync();
 	syscall(SYS_reboot, LINUX_REBOOT_MAGIC1, LINUX_REBOOT_MAGIC2,
 		LINUX_REBOOT_CMD_KEXEC, NULL);
 	perror("reboot(KEXEC)");
