@@ -2161,3 +2161,64 @@ Bootargs:
     - `KGSL VERSION: drv=3.14 dev=3.1`
     - `qkx-pil: PAS_INIT_IMAGE pas_id=13 mdata_phys=0x00000001efc72000 size=6860 ret=0 scm_ret=0` -> `a650_zap: Brought out of reset`.
   - Saved final `4.19` Stage 5 kernel diff to `patches/target-kernel-stage5.diff` and loader update in `loader/loader.c`. Ready to pivot to Linux 7.2 mainline (`overpressure/linux` + `quest2-steamos/kernel/linux72`).
+
+## CORRECTION: the gate analysed earlier is a stale upstream copy
+
+Entries above (from "Checking qkx_dma_gate()'s own claim" onward) analysed
+/mnt/HDD/Quest-2-Steam-OS-Dual-Boot/module/loader.c. That copy has an
+unconditional Hollywood refusal with "No experimental flag bypasses this".
+The loader that actually ran the Quest 2 jumps is
+/mnt/HDD/quest2-kexec-build/loader/loader.c (HANDOFF_STAGE5.md, dated
+2026-11-21). Its qkx_dma_gate() differs:
+
+- Hollywood refuses unless the `stage2_verified=1` module parameter is set
+  (loader.c:1036-1053), with a message saying it is an explicit research
+  opt-in. It is not an unconditional refusal.
+- Jumps #15-#23 ran with it set, plus shutdown_dsps=1, preserve_watchdog=1,
+  watchdog_recovery=1. Jump #23 reached a live 4.19.325 kernel with 8 CPUs,
+  DRM scanout, Wi-Fi scan, BT HCI handshake, ADSP and GPU verified.
+
+So the earlier conclusion "the gate is correct as written and reconsidering
+it needs X, Y, Z" was about the wrong code. The stale-copy findings still
+hold for that copy only. The release-readiness doc (2026-10-23) that I quoted
+as "no complete shutdown observed" is also older than the handoff.
+
+### The active loader already contains the USB fix I recommended
+
+The "concrete, ready patch" in the USB entry above (check
+dwc3_gadget_run_stop()'s return value) is already in the active loader:
+loader.c:1247-1258 calls dwc3_run_stop_fn(dwc, 0, 0) under dwc->lock,
+panics on error, then synchronize_irq(). The lock offset 312 and IRQ
+offset 2112 are hardcoded and were not verified by this session.
+
+### Remaining gaps in the active DSP stop path (loader.c:1261-1286)
+
+The loader calls sdesc->shutdown(sdesc, true) directly on each of
+adsp/cdsp/slpi/a650_zap. Checked against subsys_stop()
+(subsystem_restart.c:874-897), this path:
+
+- skips SUBSYS_BEFORE/AFTER_SHUTDOWN notifications (so FastRPC is not told);
+- skips sysmon_send_shutdown() (graceful QMI stop) and uses the forced path
+  (force_stop=true, smem force-stop bit, stop_ack wait) instead;
+- skips subsys_set_state(OFFLINE) and disable_all_irqs();
+- ignores the return value apart from a log line, then continues to the
+  AOP QMP disconnect;
+- reads the subsys_desc pointer as the first field of subsys_device
+  (`*(struct subsys_desc **)sdev`) and the embedded device at offset 240,
+  both unverified in this session.
+
+This is the forced-stop path WitherBlitz's owner audit flagged as "forced
+timeout warns and continues". Live jumps prove the sequence completed on
+that device, not that every DSP was verified stopped.
+
+### Hard rules from HANDOFF_STAGE5.md that bind further Stage 2 work
+
+- Never touch enp34s0 or "Wired connection 1" (the user's PC internet).
+- Never write to or flash UFS partitions; read-only only.
+- Never commit device logs, serials, DTBs or firmware blobs.
+- Singularity root is RAM-only; re-trigger after each Horizon reboot.
+- Always pass stage2_verified=1, preserve_watchdog=1, watchdog_recovery=1,
+  shutdown_dsps=1 with explicit image/initrd/dtb paths when executing.
+
+No hardware was touched in this entry. It is read-only analysis of the
+active loader and the pinned kernel source.
