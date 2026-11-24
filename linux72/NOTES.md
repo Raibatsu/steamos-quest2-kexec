@@ -41,6 +41,30 @@ overwrite it). Stage 1 has no kmsg forwarder; restart `host/kmsg_udp_recv.py` an
 - Bootargs: `rdinit=/init clk_ignore_unused pd_ignore_unused regulator_ignore_unused panic=5 reboot=w irqchip.gicv3_pseudo_nmi=1 nmi_watchdog=panic loglevel=7 printk.devkmsg=on console=tty0 fbcon=font:TER16x32 fbcon=rotate:3 drm_client_lib.active=fbdev`
 
 
+## MERGED (2026-11-25): upstream's linux72 layer + our kexec changes
+
+Upstream (URFAVF3MBOY/quest2-steamos, `kernel/linux72`) now carries the Android compat layer (binder, ashmem, ION, downstream `fastrpc` ABI),
+Qualcomm's Spectra camera drivers from Meta's kernel (`techpack/camera`, ~149k lines) with CCI/CSIPHY/IFE/sensor DT nodes, and a new SyncBoss
+driver. They use these to run **Meta's own tracker** (from the headset's stock partitions) for head and controller *position*; their direct
+four-camera path (`q2camd`/`q2blobs`/`q2ctltrack`) is built but not started. As of 2026-11-24 no commit shows cameras streaming on 7.2.
+
+Recipe (all scripted): clean worktree at the base commit -> `tools/apply_upstream_layer.sh <tree> <upstream checkout>` (mirrors their
+`build-linux72.yml`: DTS, patches/*.patch, panel, `drivers/oculus`, `drivers/android` -> `drivers/misc/q2android`, `camera` -> `techpack/camera`)
+-> `git apply patches/kexec-over-upstream.patch` (our psci/gic/rpmh/spmi/dwc3/u_ether/wdt/aoss/a6xx-gmu/memblock changes; hunks upstream already
+has are dropped) -> copy `dts/sm8250-oculus-hollywood-kexec.dts`, `hollywood-kexec.config`, `drivers/qcom-pm8150l-lcdb.c`.
+Config: `gabe_defconfig` + upstream `hollywood.config` + our `hollywood-kexec.config` (which now records the CPU errata, pseudo-NMI and
+hard-lockup options that used to be set by hand). The merged kernel boots, and head/controller/fan/button services all pass a regression check.
+
+Things that needed care:
+- **Do not overlay our SyncBoss node**: upstream's new driver uses `oculus,syncboss-*-gpios` and its own pin states; our overlay no longer defines one.
+  Upstream independently has `regulator-always-on` on L7C/L8C (our reopen-wedge fix).
+- **Panel**: upstream's panel driver only toggles enable/reset and assumes the bootloader left rails on and the backlight lit; after a kexec the
+  panel is dark (`panel off at probe`) and it has no backlight device. We keep **our** `panel-oculus-hollywood-jdi.c` (init sequence, backlight,
+  vddio/lcdb/blu-mcu supplies) plus the overlay's `&apps_rsc` L14A/L11C nodes, the LCDB node and the `&mdss_dsi0 panel@0` supplies.
+- UFS PHY: upstream patch 0001 replaces ours; applying both gives a duplicate `hollywood_ufsphy_cfg`.
+- `ife_dsp_clk` / `DSI PLL lock failed` messages are benign. Camera probe shows ISP + both CCI controllers; sensor probing is not exercised yet.
+- Iterate with Linux->Linux kexec: `tools/make_q2kexec_dtb.py` + `q2kexec -B`.
+
 ## FIXED (2026-11-25): controllers and the SyncBoss reopen wedge
 
 1. **Beacon payload.** The MCU's radio only enters beacon mode when `0x85` carries a payload byte: `[0x85, seq, 1, 0x01]`
