@@ -204,3 +204,30 @@ Only **Adreno 650 GPU / `vrcompositor`** (`3d00000.gpu`, `3d6a000.gmu`, `3da0000
 - `quest_kexec.ko` parameters: `image=`, `dtb=`, `initrd=`, `payload_base=` (`0x100000000`/`0x130000000`/`0x140000000`/`0x160000000`/`0x180000000`), `stage2_verified=1 shutdown_dsps=1 watchdog_recovery=1 preserve_watchdog=1 execute=1`.
 - Always recompute `rd = PAGE_ALIGN(offset + memory)` from the `Image` header when repacking `boot-*-linux72.dtb` (`initrd-start = base + rd`, `initrd-end = initrd-start + initramfs_size`).
 - Always `sync` after pushing files to `/data/local/tmp/`, and verify `mWakefulness=Awake` + `mScreenState=ON` (`am broadcast -a com.oculus.vrpowermanager.prox_close`) before kexec.
+
+## Eye alignment and hardware check (2026-11-25)
+
+Eye tuning on the merged kernel (SteamVR, slider position 2 = stock):
+- `/var/lib/q2/eyeshift` (px, + = pictures toward the nose) **does** work in SteamVR's zero-copy path, but only read at VR start. Findings by eye:
+  +275 = two separate screens, +130/+90 worse than +40, +20/0/-20 look the same. **+40 is the current best**; try 40-90 to refine.
+- `/var/lib/q2/ipdmm` (virtual eye separation, mm) is live in SteamVR but the driver ignores anything below **50 mm** (min applied was 50).
+- `Q2VR_LENSADJ` (read by driver_q2hmd) is in **tenths of a mm** (30 = +3 mm toward the nose). It was never set by the launcher; `rootfs-patches/eyes/patch_lens3.py`
+  adds `export Q2VR_LENSADJ=$(awk ...)` from `/var/lib/q2/lensadj`. Gotcha: q2vrtest writes /tmp/q2vr-run.sh from an *unquoted* heredoc, so a
+  `[ -n "$VAR" ] || VAR=0` fallback expands at write time and always zeroes the value. Lens +3 mm at slider 3 fixed black outer edges there;
+  at slider 2 the stock lens has no black edges.
+- Reproducible instant-feedback tool: `tools/q2calib.c` (static crosshair + 0..18 ruler per eye, shift read live from /var/lib/q2/eyeshift). Its
+  ruler gave the measurement (left eye hides ~200 px on its outer side, right ~140 px, so ~85 px / ~2.9 mm toward the nose, ~29 px per mm).
+  After running it the display must be re-established with a kexec: restarting q2-kmsd while it owns the panel breaks SteamVR output
+  ("KMS: the display was taken over but q2kmsd is gone - reboot to get the picture back").
+- SteamVR supervisor: after `q2vr stop` the next `q2vr start` is often dropped until `systemctl restart q2-vr`. Never `kill -9` the VR processes.
+- `rootfs-patches/eyes/*.py` are the on-device patch scripts for /usr/bin/q2buttons (volume keys) and /usr/bin/q2vrtest, in order of use. The rootfs is RAM-only,
+  so these must be re-applied after a Horizon reboot (the rootfs image is on the host and keeps them while the NBD disk is reused).
+
+`tools/hwcheck.sh` is the read-only hardware check. Results on the merged kernel:
+| Block | Result | Cause |
+|---|---|---|
+| Audio | no sound card, no /dev/snd | SND_SOC_SM8250/QCOM_COMMON and codec drivers not enabled; no sound node in the DT |
+| Wi-Fi | no interface | no ath10k/ath11k driver enabled (ATH12K=m only); no wlan node. Horizon's wlan buffers are XPU-locked (cnss_wlan) |
+| Bluetooth | no hci device | BT_QCA/HCIUART_QCA built, but no DT node for the UART/controller |
+| Battery | no power_supply class | QCOM_BATTMGR / charger / fuel-gauge drivers off (QCOM_PMIC_GLINK=y). Controller battery is reported by the tracker (100%) |
+| Sensors | only the PMIC ADC (iio) | IMU, magnetometer and proximity come through SyncBoss (`oculus,syncboss-has-prox`), which works |
