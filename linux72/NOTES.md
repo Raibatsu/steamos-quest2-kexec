@@ -244,3 +244,29 @@ Eye tuning on the merged kernel (SteamVR, slider position 2 = stock):
   (unbind/bind `0000:01:00.0` from ath11k_pci, and `serial0-0` from hci_uart_qca). Gotcha: do not order that unit Before=bluetooth.service and then
   `systemctl restart bluetooth` from inside it; use `--no-block`, or it deadlocks.
 - The clk warnings at ~2.2 s (clk_core_disable/unprepare, deferred_probe_work_func) are from the remoteproc/cdsp probe, not from these changes.
+
+## Camera bring-up on 7.2 (2026-11-25)
+
+Tools are upstream's `image/src/q2cam/*` (URFAVF3MBOY/quest2-steamos), built from source here with
+`aarch64-linux-gnu-gcc -O2 -ffreestanding -nostdlib -static -fno-stack-protector -fno-builtin -I inc -w` (freestanding, raw syscalls only; reviewed before running).
+
+| Stage | Result |
+|---|---|
+| ISP test pattern (`q2cam_tpg`: CSID TPG -> IFE fastpath RDI0, no sensor) | **works**: a 640x480 frame in 63 ms, clean teardown (one `CSID halt failed -110` at stop) |
+| Sensor subdevs | 4x `cam-sensor-driver`, 6x `cam-csiphy-driver`, `cam-isp`, `cam-isp-fastpath`, `cam-cpas`, 13 subdevs, `/dev/media0,1`, `/dev/video0,1` |
+| Sensor power (`q2camlive`) | slots 0,1,2 **power up** (L10C 3.0 V vana, S4A 1.8 V vio, MCLK0-2 at 19.2 MHz, verified in clk_summary/regulator_summary); **slot 3 fails EINVAL**: gpio95 (its MCLK pin) is held as a plain GPIO ("f100000.pinctrl:629") instead of cam_mclk |
+| Frames | **0 images** from the 3 powered sensors |
+
+Why no frames: the SyncBoss MCU starts the sensors, and it **rejects the command strings q2camlive sends** (found with `tools/sbcamprobe.py` / `tools/sbproxy.py`, which print the MCU's
+own log records, type 0x92 and 0xd8, while the tracker is stopped):
+- `2c0000` / `2d0400` (start / stop, no payload) -> `general_cam_mgr.c: Invalid camera ids provided: 0x0, num_cams: 4`
+- With a one-byte camera mask (`2c0001ff`, `2d0401ff`): the MCU walks `ov7251[0x1] [0x2] [0x4] [0x8]` and says `not yet initialized` (start) / `not configured` (stop)
+- `030004dd000101` (register 0xdd, 3 data bytes) -> `{HIFH}: set_metadata_mode: bad data_size=3`; sizes 1 and 2 are also rejected (4 or more not tried)
+- `280000` / `280001ff` (camera probe) -> a type 0x46 stream packet with `00`, no log line; the cameras stay "not initialized"
+- Same replies with the sensors powered by the AP, so it is not a power-sequencing problem.
+Frame format is {type, seq, len, data}: `2c 00 01 ff` = type 0x2c, seq 0, len 1, data ff.
+Hypothesis: this MCU firmware wants explicit payloads (camera mask, init/config data) that upstream's strings, written against Quest OS 4.19, omit. Next: read Meta's `libsyncboss`/sensors
+service in the stock partitions (read-only, `q2stockcam.py` parses the super partition) to get the real camera init command, or run Meta's own tracker as upstream does.
+Gotchas: `q2camlive` needs `/run/q2headtrack.pid`; `sbproxy.py` removes it on exit, so restart `q2-headtrack` afterwards. The camera commands briefly stall the MCU link
+("bad magic from MCU" x10, IMU pauses ~5 s, controllers drop) and recover on their own.
+
