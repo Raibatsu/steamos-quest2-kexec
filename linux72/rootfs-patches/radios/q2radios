@@ -1,0 +1,19 @@
+#!/bin/sh
+# q2radios: bring up the QCA6390 Wi-Fi and Bluetooth once the rootfs (and so their firmware) is available.
+# Stage 1's initramfs has no firmware, so ath11k and hci_qca fail there; re-probe them here.
+L() { echo "$(date +%T) $*"; echo "q2-radios: $*" > /dev/kmsg 2>/dev/null; }
+for i in $(seq 1 30); do [ -e /sys/bus/pci/devices/0000:01:00.0 ] && break; sleep 1; done
+if [ -e /sys/bus/pci/devices/0000:01:00.0 ] && [ -e /lib/firmware/ath11k/QCA6390/hw2.0/amss.bin ]; then
+  if ! ip link show wlan0 >/dev/null 2>&1; then
+    echo 0000:01:00.0 > /sys/bus/pci/drivers/ath11k_pci/unbind 2>/dev/null; sleep 1
+    echo 0000:01:00.0 > /sys/bus/pci/drivers/ath11k_pci/bind 2>&1 && L "Wi-Fi re-probed" || L "Wi-Fi bind failed"
+  else L "Wi-Fi already up"; fi
+else L "Wi-Fi: no PCIe device or no firmware"; fi
+d=$(ls /sys/bus/serial/devices 2>/dev/null | grep -- '-' | head -1)
+if [ -n "$d" ]; then
+  if ! grep -q 'setup on UART is completed' /dev/null 2>/dev/null && ! hciconfig hci0 2>/dev/null | grep -q "BD Address: 02:"; then
+    echo "$d" > /sys/bus/serial/drivers/hci_uart_qca/unbind 2>/dev/null; sleep 2
+    echo "$d" > /sys/bus/serial/drivers/hci_uart_qca/bind 2>&1 && L "Bluetooth re-probed" || L "Bluetooth bind failed"
+  else L "Bluetooth already configured"; fi
+  sleep 6; systemctl --no-block restart bluetooth 2>/dev/null
+else L "Bluetooth: no UART device"; fi

@@ -1,0 +1,12 @@
+[Unit]
+Description=Quest 2 port: bring up the QCA6390 Wi-Fi and Bluetooth (re-probe once firmware is on the rootfs)
+After=local-fs.target systemd-udevd.service
+Before=NetworkManager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/q2radios
+
+[Install]
+WantedBy=multi-user.target

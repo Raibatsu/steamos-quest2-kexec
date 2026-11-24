@@ -226,8 +226,21 @@ Eye tuning on the merged kernel (SteamVR, slider position 2 = stock):
 `tools/hwcheck.sh` is the read-only hardware check. Results on the merged kernel:
 | Block | Result | Cause |
 |---|---|---|
-| Audio | no sound card, no /dev/snd | SND_SOC_SM8250/QCOM_COMMON and codec drivers not enabled; no sound node in the DT |
-| Wi-Fi | no interface | no ath10k/ath11k driver enabled (ATH12K=m only); no wlan node. Horizon's wlan buffers are XPU-locked (cnss_wlan) |
-| Bluetooth | no hci device | BT_QCA/HCIUART_QCA built, but no DT node for the UART/controller |
-| Battery | no power_supply class | QCOM_BATTMGR / charger / fuel-gauge drivers off (QCOM_PMIC_GLINK=y). Controller battery is reported by the tracker (100%) |
+| Audio | **still missing** | the speakers and mics sit behind an AKM AK4331 (headphone DAC) and a C-Media CM710x DSP codec (I2C 0x2c, needs `CM710X.bin`); neither has a mainline driver. Upstream's own notes say there is no 7.2 driver either |
+| Wi-Fi | **works** | QCA6390 on PCIe0 via ath11k (`qca6390 hw2.0`, fw 0x10121492); scans find real networks |
+| Bluetooth | **works** | QCA6390 on UART6 via hci_qca; controller `02:51:4B:58:00:B7` (set in the DT), scan finds devices |
+| Battery | **works (gauge only)** | TI BQ27Z561 on i2c4 @0x55: charge, voltage, temperature. The SMB5 charger has no mainline driver, so no charger status |
 | Sensors | only the PMIC ADC (iio) | IMU, magnetometer and proximity come through SyncBoss (`oculus,syncboss-has-prox`), which works |
+
+### Wi-Fi, Bluetooth and battery bring-up (2026-11-25)
+- Device tree (`dts/sm8250-oculus-hollywood-kexec.dts`): `qca6390-pmu` power sequencer (WLAN_EN gpio20, BT_EN gpio21; supplies S6A 0.95 V, S4A 1.8 V,
+  S5A 1.9 V, S8C 1.35 V; pins and rails read from Horizon's tree), `&pcie0` + `&pcie0_phy` + `wifi@0` (`pci17cb,1101`), `&uart6` + `bluetooth` (`qcom,qca6390-bt`),
+  `serial1 = &uart6` (without the alias qcom_geni_serial refuses the port: "Invalid line -19"), `local-bd-address` (without it BlueZ treats the chip as
+  unconfigured and shows no controller), and `&i2c4` with the gauge. `&gpi_dma0` and `&qupv3_id_0` must be enabled for i2c4.
+- Config: `PCI_PWRCTRL_PWRSEQ=y` (was `m`), `ATH11K=y`, `ATH11K_PCI=y`, `BATTERY_BQ27XXX(_I2C)=y`.
+- Firmware is not in the repo. Wi-Fi: copy `amss.bin`, `m3.bin`, `board-2.bin` from linux-firmware `ath11k/QCA6390/hw2.0/` to the rootfs. Bluetooth: `qca/htbtfw20.tlv`
+  and `qca/htnv20.bin` were already on the rootfs.
+- Stage 1's initramfs has no firmware, so both drivers fail there. `rootfs-patches/radios/q2radios` + `q2-radios.service` re-probe them once Stage 2 is up
+  (unbind/bind `0000:01:00.0` from ath11k_pci, and `serial0-0` from hci_uart_qca). Gotcha: do not order that unit Before=bluetooth.service and then
+  `systemctl restart bluetooth` from inside it; use `--no-block`, or it deadlocks.
+- The clk warnings at ~2.2 s (clk_core_disable/unprepare, deferred_probe_work_func) are from the remoteproc/cdsp probe, not from these changes.
