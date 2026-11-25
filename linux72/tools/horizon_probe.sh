@@ -2,6 +2,7 @@
 # horizon_probe.sh - run q2_snapshot.sh on the headset (Horizon over adb root, or our Linux over telnet) and pull the result to this computer, to compare the two.
 #   horizon_probe.sh horizon snapshot|audio|ctl|dyndbg ...   Horizon (Quest OS) booted and rooted with Singularity, adb connected
 #   horizon_probe.sh linux   snapshot|audio|ctl|dyndbg ...   our Stage 2 (telnet 10.42.0.2:2323), via the host's 10.42.0.1 web server
+#   horizon_probe.sh horizon rtstart <name>                  restart the tracking services under strace (captures their boot-time init); finish with: horizon_probe.sh horizon stop
 #   horizon_probe.sh compare <horizon-dir> <linux-dir>       side-by-side summary of what differs (clocks, regulators, gpios, pinctrl, props, asoc, regmaps)
 # Output goes to /mnt/HDD/quest2-probe/<system>-<mode>-<time>/ (outside the git repo: it holds device logs, never commit it).
 # Read-only on the device except dynamic-debug / ftrace flags that q2_snapshot.sh sets and clears again. Never writes partitions.
@@ -32,7 +33,7 @@ if [ "$sys" = horizon ] && [ "$mode" = stop ]; then
   rm -f $STATE; echo "result: $DEST ($(ls "$DEST" | wc -l) files)"; exit 0
 fi
 TS=$(date +%Y%m%d-%H%M%S)
-NAME=""; [ "$mode" = start ] && { NAME="-$3"; }
+NAME=""; { [ "$mode" = start ] || [ "$mode" = rtstart ]; } && { NAME="-$3"; }
 DEST="$OUTROOT/$sys-${mode:-snapshot}$NAME-$TS"; mkdir -p "$DEST"
 shift 2
 ARGS="$*"
@@ -53,6 +54,11 @@ if [ "$sys" = horizon ]; then
   adb push "$HERE/q2_snapshot.sh" /data/local/tmp/q2_snapshot.sh >/dev/null || die "push script"
   adb push "$DEST/tone.wav" $R/tone.wav >/dev/null
   [ -x "$B/tools/strace-aarch64" ] && adb push "$B/tools/strace-aarch64" /data/local/tmp/strace >/dev/null && adb shell "su -c 'chmod 755 /data/local/tmp/strace'"
+  if [ "$mode" = rtstart ]; then
+    echo "$DEST" > $STATE
+    adb shell "su -c 'sh /data/local/tmp/q2_snapshot.sh trace-restart $R'" 2>&1 | tail -3
+    echo "services restarted under strace. Let Horizon settle / do the action, then run: horizon_probe.sh horizon stop"; exit 0
+  fi
   if [ "$mode" = start ]; then
     echo "$DEST" > $STATE
     set -- $ARGS; shift; ARGS="$*"            # drop the capture name; the rest is the process list

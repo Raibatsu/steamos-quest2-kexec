@@ -10,6 +10,7 @@
 #   q2_snapshot.sh ctl <outdir> [secs]            watch the controller/tracking stack for [secs]: processes with /dev/syncboss* open, their syscalls (strace if
 #                                                 present, else ftrace syscall events by pid), logcat for tracking/syncboss tags, syncboss dynamic debug
 #   q2_snapshot.sh trace <outdir> <secs> <regex>   strace (pushed to /data/local/tmp/strace) every process whose name/cmdline matches the regex, all ioctl/read/write data
+#   q2_snapshot.sh trace-restart <outdir>           restart the SyncBoss/tracking services under strace (boot-time init capture); end with trace-stop
 #   q2_snapshot.sh dyndbg-off                     clear every flag set by this script
 # Nothing here writes to any partition or device register. Output stays on the device until the host pulls it (see horizon_probe.sh); never commit it.
 OUT=${2:-/data/local/tmp/q2snap}
@@ -159,6 +160,34 @@ trace_stop() {
   echo "stopped; $(du -sh "$OUT" | cut -f1)"
 }
 
+# trace-restart : restart Horizon's SyncBoss/tracking services under strace so their boot-time camera init is captured (root comes after boot, so this replays it).
+# A watcher per service polls for the new process and attaches strace within a few milliseconds of its start. Stop with trace-stop.
+trace_restart() {
+  have strace || { echo "no strace" >&2; return 1; }
+  : > "$OUT/strace.pids"; : > "$OUT/trace_pids"
+  getprop > "$OUT/props_before" 2>/dev/null
+  svcs=$(getprop | sed -n 's/^\[init\.svc\.\(.*\)\]: \[running\]$/\1/p' | grep -i -E 'sensors|trackingservice|tracking$|vrdevicemanager')
+  echo "$svcs" > "$OUT/svc_names"
+  # binary names to watch (what pidof matches)
+  for b in trackingservice vendor.oculus.hardware.sensors@1.0-service; do
+    ( n=0; while [ $n -lt 4000 ]; do
+        pid=$(pidof -s $b 2>/dev/null)
+        if [ -n "$pid" ] && [ ! -f "$OUT/attached_$b.$pid" ]; then
+          echo > "$OUT/attached_$b.$pid"
+          nohup strace -f -ttt -s 512 -xx -e trace=openat,ioctl,read,write,pread64,pwrite64,sendmsg,recvmsg,writev,readv -p $pid -o "$OUT/strace_${b}_$pid" >/dev/null 2>"$OUT/strace_${b}_$pid.err" &
+          echo $! >> "$OUT/strace.pids"; echo "$pid $b" >> "$OUT/trace_pids"
+        fi
+        n=$((n+1))
+      done ) >/dev/null 2>&1 &
+    echo $! >> "$OUT/strace.pids"
+  done
+  sleep 1
+  for s in $svcs; do setprop ctl.stop $s; done
+  sleep 3
+  for s in $svcs; do setprop ctl.start $s; done
+  echo "restarted: $(echo $svcs | tr '\n' ' ')"
+}
+
 case "$mode" in
   snapshot) snapshot ;;
   dyndbg) shift 2; for p in "$@"; do dd_set "$p"; done ;;
@@ -168,6 +197,7 @@ case "$mode" in
   trace) trace "$3" "$4" ;;
   trace-start) trace_start "$3" ;;
   trace-stop) trace_stop ;;
+  trace-restart) trace_restart ;;
   *) sed -n 2,17p "$0"; exit 1 ;;
 esac
 echo "done: $OUT"
