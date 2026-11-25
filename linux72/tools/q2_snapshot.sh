@@ -43,7 +43,7 @@ snapshot() {
   capsh alsa 'cat /proc/asound/cards /proc/asound/devices /proc/asound/pcm 2>&1; ls /proc/asound; have() { command -v $1 >/dev/null 2>&1; }; have tinymix && tinymix 2>&1 | head -2000; have amixer && amixer contents 2>&1 | head -2000'
   capsh asoc "ls $DBG/asoc 2>/dev/null; for f in $DBG/asoc/*/dapm/* $DBG/asoc/dais $DBG/asoc/components $DBG/asoc/platforms; do [ -f \$f ] && { echo == \$f; cat \$f; }; done 2>/dev/null | head -3000"
   capsh regmap_list "ls $DBG/regmap"
-  capsh regmap_pmic "for d in $DBG/regmap/*-0[0-9]; do echo == \$d; cat \$d/registers 2>/dev/null; done | head -20000"
+  capsh regmap_pmic "for d in $DBG/regmap/*-0[0-9]; do echo == \$d; cat \$d/registers 2>/dev/null; done"
   capsh syncboss_sysfs 'for d in /sys/devices/virtual/misc/syncboss* /sys/class/syncboss*; do [ -e $d ] && { echo == $d; find $d -maxdepth 3 -type f 2>/dev/null | while read f; do echo "$f=$(head -c 200 $f 2>/dev/null | tr "\n" " ")"; done; }; done'
   capsh syncboss_users 'for p in /proc/[0-9]*; do ls -l $p/fd 2>/dev/null | grep -q "syncboss" && echo "$(basename $p) $(cat $p/comm) $(tr "\0" " " < $p/cmdline | head -c 200)"; done'
   capsh input 'cat /proc/bus/input/devices'
