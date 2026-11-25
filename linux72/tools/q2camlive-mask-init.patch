@@ -1,0 +1,20 @@
+--- a/image/src/q2cam/q2camlive_main.c	2026-11-25 05:19:38.968516565 +0500
++++ b/image/src/q2cam/q2camlive_main.c	2026-11-25 05:19:38.978244974 +0500
+@@ -556,7 +556,7 @@
+ 		}
+ 	P("%d camera pipelines running", ncams);
+ 	if (!ncams) goto end;
+-	mcu = sbcam("2d0400\n280000\n030004dd000101\n030004dd010101\n2c0000\n") == 0;
++	mcu = sbcam("2d000407000000\n2e000407000000\n2c000407000000\n") == 0;
+ 	double t0 = now(); int nchild = 0;
+ 	for (int k = 0; k < ncams; k++) {
+ 		long pid = sc6(220 /*clone*/, 17 /*SIGCHLD*/, 0, 0, 0, 0, 0);
+@@ -602,7 +602,7 @@
+ 	}
+ end:
+ 	for (int k = 0; cams && k < ncams; k++) cam_teardown(&cams[k]);
+-	if (mcu) sbcam("2d0400\n");
++	if (mcu) sbcam("2d000407000000\n");
+ 	if (nsens) sensors_down();
+ 	if (session) { struct cam_req_mgr_session_info s2 = { session, 0 }; r = cam_ctl(crm, CAM_REQ_MGR_DESTROY_SESSION, &s2, sizeof s2); P("DESTROY_SESSION: %s", r ? errname(r) : "ok"); }
+ 	if (isp >= 0) sys_close(isp);

@@ -255,8 +255,29 @@ Tools are upstream's `image/src/q2cam/*` (URFAVF3MBOY/quest2-steamos), built fro
 | ISP test pattern (`q2cam_tpg`: CSID TPG -> IFE fastpath RDI0, no sensor) | **works**: a 640x480 frame in 63 ms, clean teardown (one `CSID halt failed -110` at stop) |
 | Sensor subdevs | 4x `cam-sensor-driver`, 6x `cam-csiphy-driver`, `cam-isp`, `cam-isp-fastpath`, `cam-cpas`, 13 subdevs, `/dev/media0,1`, `/dev/video0,1` |
 | Sensor power (`q2camlive`) | slots 0,1,2 **power up** (L10C 3.0 V vana, S4A 1.8 V vio, MCLK0-2 at 19.2 MHz, verified in clk_summary/regulator_summary); **slot 3 fails EINVAL**: gpio95 (its MCLK pin) is held as a plain GPIO ("f100000.pinctrl:629") instead of cam_mclk |
-| Frames | **0 images** from the 3 powered sensors |
+| Frames | **works**: 3 sensors x ~59.8 fps, ~880 frames each in 15 s, hardware timestamps 16.7 ms apart, real images (640x481 incl. one metadata row) |
 
+**RESOLVED (2026-11-25): the camera command sequence.** The MCU was rejecting upstream's strings because they carry no camera mask and skip `init`. Meta's own
+`libsyncboss.so` (`odm_a/lib64`, read from the stock partitions) builds every camera start/stop/init call through one helper: command byte, then a **4-byte
+little-endian camera bitmask** as payload (timeout 125). `camera_v2_start_streaming` = `0x2c`, `stop_streaming` = `0x2d`, **`init` = `0x2e`**, `deinit` = `0x2f`;
+`init` then loads gamma tables and sends them with `0x25`, and `set_frame_config_v2` uses `0xb1` (not needed for streaming). The working sequence is
+`2d 00 04 <mask>`, `2e 00 04 <mask>`, `2c 00 04 <mask>` ... capture ... `2d 00 04 <mask>` with mask `07000000` (slots 0-2; use `0f000000` once slot 3 powers up).
+The old `0x28` probe and `0xdd` set_metadata_mode steps are not needed. `tools/q2camlive-mask-init.patch` applies that change to upstream's `q2camlive_main.c`;
+`rootfs-patches/camera/patch_wl.py` adds `0x2e`/`0x2f` to q2headtrack's camera-command whitelist (it already forwarded 0x2a/0x2c/0x2d/0x28 and 0x03..0xdd).
+Verified through the live tracker: 2643 images in 15 s, controllers kept streaming. The earlier notes below (command rejections) describe the old, incomplete sequence.
+
+Still open: **slot 3** (gpio95 is held as a plain GPIO, so its MCLK never starts), and turning frames into tracking (`q2blobs`/`q2ctltrack`, or Meta's tracker).
+
+### Meta's stock userspace, extracted for building native replacements (2026-11-25)
+`tools/q2stockmount.py mount|umount` mounts the stock partitions of `super` (vendor_a, odm_a, product_a, system_ext_a, system_a, all ext4) **read-only** (dm --readonly, ro,noload,
+a 1 MiB margin after the last extent because vendor_a's ext4 block count is 15 blocks larger than its LP extents, which makes ext4 refuse the mount otherwise). It was used to copy
+vendor_a and odm_a whole plus the oculus/sensor/ossdk/tracking libraries of system_ext_a to the host (458 MB, 1122 files, kept OUT of git under `quest2-linux72/meta-extract/files/`):
+- SyncBoss/camera: `libsyncboss.so`, `libsyncbossmanager.so`, `syncboss.bin` (MCU firmware) + `syncboss-unwind.bin`, `syncboss_consumers_ctl`, the four `com.qti.sensormodule.liteon_ov7251_*_syncboss_cam_N.bin`,
+  `chicamera/com.qti.tuned.default.bin`, `firmware/CAMERA_ICP.elf`, `libfastpathcamerahal.so`, `libcamxcsl.so`, `libcamerahal.so`, `libxrcameratal.so`, `cameramuxmode/configv2.json`
+- Sensors/OS SDK: `vendor.oculus.hardware.sensors@1.0-service`, `vrsensorsctl`, `libvrsensors-*`, `libsensor*`, `libossdk.oculus.so`, `allowedOSSDKEvents.json`
+- Tracking: `trackingservice` + `trackingservice.cfg`, `libtrackingengines.so` (44 MB), `libhzos_tracking*`, hand/face/body/passive-tracking models under `odm_a/etc`
+- DSP/audio: `vendor_a/dsp`, `lib/rfsa/adsp` skeleton libs, `cdsprpcd`/`adsprpcd`, `libacdb*`, `etc/acdbdata/*`, `audio_policy*.xml`
+Nothing there is committed (firmware and vendor binaries, and the persist partition was never copied). Absolute-path symlinks were skipped on extraction (tarfile data filter).
 Why no frames: the SyncBoss MCU starts the sensors, and it **rejects the command strings q2camlive sends** (found with `tools/sbcamprobe.py` / `tools/sbproxy.py`, which print the MCU's
 own log records, type 0x92 and 0xd8, while the tracker is stopped):
 - `2c0000` / `2d0400` (start / stop, no payload) -> `general_cam_mgr.c: Invalid camera ids provided: 0x0, num_cams: 4`

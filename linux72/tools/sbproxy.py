@@ -44,7 +44,7 @@ while time.time() < t_end:
         if stt is not None and stt.st_uid == 0:
             for ln in lines[:8]:
                 b = bytes.fromhex(ln)
-                ok = len(b) >= 3 and len(b) == 3 + b[2] and (b[0] in (0x2a, 0x2c, 0x2d, 0x28) or (b[0] == 0x03 and len(b) >= 4 and b[3] == 0xdd))
+                ok = len(b) >= 3 and len(b) == 3 + b[2] and (b[0] in (0x2a, 0x2c, 0x2d, 0x28, 0x2e, 0x2f) or (b[0] == 0x03 and len(b) >= 4 and b[3] == 0xdd))
                 if not ok: print('refused', ln, flush=True); continue
                 os.write(cmd, b); print('sent', b.hex(), flush=True); pump(0.8)
 print('record counts:', ' '.join('%s%02x:%d' % (k[0], k[1], v) for k, v in sorted(seen.items())))
