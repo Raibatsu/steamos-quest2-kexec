@@ -119,7 +119,7 @@ ctl() {
 
 # trace <secs> <name-regex> : strace every process whose comm/cmdline matches, with generous string sizes (ioctl/read/write data included)
 trace() {
-  secs=${1:-20}; re=${2:-trackingservice}
+  secs=${1:-20}; re=$(echo "${2:-trackingservice}" | tr "," "|")
   have strace || { echo "no strace on this system (push tools/strace-aarch64 to /data/local/tmp/strace)" >&2; return 1; }
   SP=''
   for p in /proc/[0-9]*; do
