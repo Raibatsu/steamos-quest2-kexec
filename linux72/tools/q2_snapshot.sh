@@ -135,6 +135,30 @@ trace() {
   echo "trace: $(wc -l < "$OUT/trace_pids") processes, $(du -sh "$OUT" | cut -f1)"
 }
 
+# trace-start <regex> : like trace, but returns at once; the straces keep running until trace-stop (no timer: the human decides when the action is done)
+trace_start() {
+  re=$(echo "${1:-trackingservice}" | tr "," "|")
+  have strace || { echo "no strace on this system" >&2; return 1; }
+  : > "$OUT/trace_pids"; : > "$OUT/strace.pids"
+  capsh controls_before 'have() { command -v $1 >/dev/null 2>&1; }; have tinymix && tinymix 2>&1'
+  capsh power_before 'for d in /sys/class/power_supply/*; do echo == $d; for f in $d/*; do [ -f $f ] && echo "$(basename $f)=$(cat $f 2>/dev/null)"; done; done'
+  for p in /proc/[0-9]*; do
+    pid=$(basename $p); n="$(cat $p/comm 2>/dev/null) $(tr '\0' ' ' < $p/cmdline 2>/dev/null)"
+    case "$n" in *strace*|*q2_snapshot*) continue ;; esac
+    echo "$n" | grep -Eq "$re" || continue
+    echo "$pid $n" >> "$OUT/trace_pids"
+    nohup strace -f -ttt -s 512 -xx -e trace=openat,ioctl,read,write,pread64,pwrite64,sendmsg,recvmsg,writev,readv -p $pid -o "$OUT/strace_$pid" >/dev/null 2>"$OUT/strace_$pid.err" &
+    echo $! >> "$OUT/strace.pids"
+  done
+  echo "tracing $(wc -l < "$OUT/trace_pids") processes"
+}
+trace_stop() {
+  [ -f "$OUT/strace.pids" ] && kill $(cat "$OUT/strace.pids") 2>/dev/null; sleep 1
+  capsh controls_after 'have() { command -v $1 >/dev/null 2>&1; }; have tinymix && tinymix 2>&1'
+  capsh power_after 'for d in /sys/class/power_supply/*; do echo == $d; for f in $d/*; do [ -f $f ] && echo "$(basename $f)=$(cat $f 2>/dev/null)"; done; done'
+  echo "stopped; $(du -sh "$OUT" | cut -f1)"
+}
+
 case "$mode" in
   snapshot) snapshot ;;
   dyndbg) shift 2; for p in "$@"; do dd_set "$p"; done ;;
@@ -142,6 +166,8 @@ case "$mode" in
   audio) audio "$3" ;;
   ctl) ctl "$3" ;;
   trace) trace "$3" "$4" ;;
+  trace-start) trace_start "$3" ;;
+  trace-stop) trace_stop ;;
   *) sed -n 2,17p "$0"; exit 1 ;;
 esac
 echo "done: $OUT"

@@ -23,8 +23,17 @@ if [ "$sys" = compare ]; then
   exit 0
 fi
 
+STATE=/tmp/q2probe.state
+if [ "$sys" = horizon ] && [ "$mode" = stop ]; then
+  [ -f $STATE ] || die "no trace in progress (run: horizon_probe.sh horizon start <name> <procs>)"
+  DEST=$(cat $STATE)
+  adb shell "su -c 'sh /data/local/tmp/q2_snapshot.sh trace-stop /data/local/tmp/q2snap'" 2>&1 | tail -2
+  adb pull /data/local/tmp/q2snap/. "$DEST/" >/dev/null 2>&1 || die "pull results"
+  rm -f $STATE; echo "result: $DEST ($(ls "$DEST" | wc -l) files)"; exit 0
+fi
 TS=$(date +%Y%m%d-%H%M%S)
-DEST="$OUTROOT/$sys-${mode:-snapshot}-$TS"; mkdir -p "$DEST"
+NAME=""; [ "$mode" = start ] && { NAME="-$3"; }
+DEST="$OUTROOT/$sys-${mode:-snapshot}$NAME-$TS"; mkdir -p "$DEST"
 shift 2
 ARGS="$*"
 # a 3 s 1 kHz 48 kHz S16 stereo tone for the audio trace
@@ -44,6 +53,12 @@ if [ "$sys" = horizon ]; then
   adb push "$HERE/q2_snapshot.sh" /data/local/tmp/q2_snapshot.sh >/dev/null || die "push script"
   adb push "$DEST/tone.wav" $R/tone.wav >/dev/null
   [ -x "$B/tools/strace-aarch64" ] && adb push "$B/tools/strace-aarch64" /data/local/tmp/strace >/dev/null && adb shell "su -c 'chmod 755 /data/local/tmp/strace'"
+  if [ "$mode" = start ]; then
+    echo "$DEST" > $STATE
+    set -- $ARGS; shift; ARGS="$*"            # drop the capture name; the rest is the process list
+    adb shell "su -c 'sh /data/local/tmp/q2_snapshot.sh trace-start $R $ARGS'" 2>&1 | tail -2
+    echo "capturing. Do the action, then run: horizon_probe.sh horizon stop"; exit 0
+  fi
   echo "running q2_snapshot.sh $mode on Horizon (this can take a minute)..."
   timeout 600 adb shell "su -c 'sh /data/local/tmp/q2_snapshot.sh $mode $R $ARGS'" 2>&1 | tail -5
   adb pull $R/. "$DEST/" >/dev/null 2>&1 || die "pull results"
