@@ -16,9 +16,10 @@ if [ "$2" = dry ]; then
 fi
 # candidate payload windows (units of 0x1000000: 130 = 0x130000000). Which one is free varies per Horizon boot: the real run claims the 56 MiB window first and
 # fails with -16 if a page in it is pinned (or "unsupported pageblock type" if it is unmovable); 2026-11-25: 130, 110, 100, 140-180 failed, 120 worked.
-# 2026-11-26: only payload base 120 has ever booted Linux; every other window (100,110,130,...) jumps and then hangs 0.3 s into the boot (right after simpledrm) and reboots Horizon,
-# costing a Singularity run. So the default is 120 only; pass BASES="130 110 ..." to experiment.
-for pb in ${BASES:-120}; do
+# 2026-11-26 measured: base 120 boots (a dozen times), base 140 boots, base 130 claims fine and then hangs 0.31 s into the boot (right after the initrd is freed / simpledrm, 2 of 2)
+# and reboots Horizon, costing a Singularity run; the others are untested. Default = the known-good windows only; if both are busy (-16) this stops and the caller reports it
+# (reboot Horizon and jump straight away). Pass BASES="150 160 ..." (Q2_BASES for boot_quest2.sh) to test other windows.
+for pb in ${BASES:-120 140}; do
   insmod ./quest_kexec.ko $COMMON dtb=/data/local/tmp/boot-$pb-$SUF.dtb payload_base=0x${pb}000000 shutdown_dsps=1 watchdog_recovery=1 preserve_watchdog=1 execute=1 2>&1
   echo "base $pb: $(dmesg | grep quest_kexec | tail -1)"
   sleep 3

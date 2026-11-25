@@ -76,9 +76,10 @@ pgrep -f 'kmsg_udp_recv.py'   >/dev/null || { ( cd "$B/host" && nohup python3 -I
 sleep 2; ss -ltnu 2>/dev/null | grep -E "$HOST:(10809|6666)" | sed 's/  */ /g'
 
 step "7/8 THE JUMP: Horizon -> Linux 7.2 (kxc.sh tries each payload base until one jumps; the adb session dies)"
-timeout 150 adb shell "su -c 'sh /data/local/tmp/kxc.sh $CLAIM_MB'" > /tmp/q2_kxc.out 2>&1 &
+# Q2_BASES="130 110" overrides the payload windows kxc.sh tries (default: 120 140, the windows known to boot; 130 hangs)
+timeout 150 adb shell "su -c 'BASES=\"${Q2_BASES:-120 140}\" sh /data/local/tmp/kxc.sh $CLAIM_MB'" > /tmp/q2_kxc.out 2>&1 &
 for i in $(seq 1 90); do ping -c1 -W1 $HEAD >/dev/null 2>&1 && { echo "Stage 1 answers on $HEAD after ~${i}s"; break; }; sleep 2; done
-ping -c1 -W2 $HEAD >/dev/null 2>&1 || { tail -5 /tmp/q2_kxc.out; die "Stage 1 did not come up. Headset probably still in Horizon or crashed: check /sys/fs/pstore after the next Singularity, see NOTES.md"; }
+ping -c1 -W2 $HEAD >/dev/null 2>&1 || { tail -5 /tmp/q2_kxc.out; if grep -q "failed: -16" /tmp/q2_kxc.out 2>/dev/null && ! grep -q "base .*: .*executing\|jump" /tmp/q2_kxc.out 2>/dev/null && adb devices | grep -q "device$" && adb shell "su -c id" 2>/dev/null | grep -q uid=0; then die "no known-good payload window (120, 140) could be claimed: Horizon memory is too busy. Nothing was jumped; reboot Horizon, run Singularity, and run this script again right away."; fi; die "Stage 1 did not come up. Headset probably still in Horizon or crashed: check /sys/fs/pstore after the next Singularity, see NOTES.md"; }
 sleep 8
 
 step "8/8 Stage 1 -> NBD root -> Stage 2"
