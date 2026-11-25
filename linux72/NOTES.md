@@ -313,9 +313,21 @@ running `/etc` land in the upper layer: they persist on the btrfs root and `syst
 q2-headtrack and q2-buttons were already installed that way. Units: `rootfs-patches/camera/q2-camd.service`, `q2-ctltrack.service`, `rootfs-patches/radios/q2-radios.service`.
 Source-built binaries in /usr/bin: q2camlive (patched, see tools/q2camlive-mask-init.patch), q2blobs, q2ctltrack (upstream sources, unmodified); originals saved as `*.upstream-prebuilt`.
 
-### Controller tracking status
-Pipeline runs end to end (cameras -> q2blobs/q2ctltrack -> /dev/shm/q2ctlpos; SteamVR's q2hmd falls back to the arm model per hand after 1.5 s without camera data, so it is safe to run).
-No controller lock yet: the frames are very dark (max ~40/255 in a normal room) and q2ctltrack reports both hands "not seen". Controller LEDs strobe only when the MCU's camera
-scheduler ("NICE" slots: `syncboss_nice_config_slots`, `syncboss_nice_config_camera_set_slots`) and the controller LED config (`syncboss_input_set_led_config`, `..._set_led_ontime_us`) are set up, as Meta's trackingservice does;
-we only send camera init/start (default exposure) and put the radio in beacon mode. Next: read those functions in `meta-extract/files/odm_a/lib64/libsyncboss.so` and `odm_a/etc/trackingservice.cfg`.
+### Controller tracking status (updated 2026-11-25)
+**Native camera tracking works end to end, no Meta runtime involved.** With both controllers held 30-60 cm in front of the headset, `q2ctltrack` locks both hands: e.g. LEFT at x 0.27 y 0.03 z -0.66 m
+from 17 LEDs seen by cameras 0x14, 0.84 px reprojection error; RIGHT found in the same window. SteamVR's q2hmd picks it up per hand ("left hand: position from the cameras", "controller orientation: controller IMU,
+heading from the cameras") and falls back to the arm model after 1.5 s without camera data ("cameras lost it for 1.5 s, arm model"), so running q2-ctltrack at boot is safe. SteamVR + 4 cameras + solver: 49 C, fan 9.4k RPM.
+- Camera order is right as is: `/var/lib/q2/cam_mirror` = 1 (mirrored slot -> calibration mapping) gave NO lock; leave the file absent.
+- No LED sync was needed: the controllers' LEDs are visible and lock without us sending any NICE schedule or LED config.
+- Weak point is lock *stability*: frames are very dark (max ~40/255 indoors, default exposure) and the solver loses hands often ("few dots"); in a 40 s window with the controllers held up the left locked in 6 of 40 one-second
+  windows, the right in 3 (hand placement was not controlled). More exposure/gain, i.e. a NICE schedule, is the lever.
 
+What is decoded of Meta's NICE (camera scheduler) protocol, from `libsyncboss.so` static analysis (`odm_a/lib64`, in meta-extract/, not in git):
+- `syncboss_nice_config_slots(ctx, slots, n)`, n <= 8: packs **17 bytes per slot** = `[0]=u8 a, [1:5]=0, [5:9]=0, [9:13]=u32 b, [13:15]=u16 c, [15:17]=u16 d (d < 0x800, masked 0x7ff)` from 16-byte input entries
+  (in[0]=u8 a, in[4]=u32 b, in[8]=u16 c, in[12]=u32 d), sends **cmd 0xef** with the 17n-byte buffer, then **cmd 0x64** with no payload (commit/apply). Sent through `send(ctx, cmd, payload, len, wait_reply=1, timeout 15000 ms)`.
+  Field meanings are not decoded yet (nice_config_camera_set_slots builds them from 168-byte per-slot camera descriptions; it compares frame periods against 8333 us and 16666 us, i.e. 120/60 Hz).
+- `syncboss_nice_get_exposure_range(ctx, cam, rate, out)` queries the MCU with **cmd 0x49** (request payload byte 0x0c plus the camera id) and returns min/max exposure.
+- `syncboss_camera_v2_set_frame_config_v2` sends cmd 0xb1, `set_gamma_compression` cmd 0x25 (init loads 76-entry gamma tables from files). Most other camera setters and the controller LED functions
+  (`syncboss_input_set_led_config`, `..._set_led_ontime_us`) go through a command-queue layer (worker thread, `0x68ca4`/`0x5aca0`) and need more tracing.
+- Meta's own config: `odm_a/etc/trackingservice.cfg` (`nice_constellation = "jedi"`), `odm_a/etc/cameramuxmode/configv2.json` (4 slots 0:0..3:0 over cameras 0-3; purposes iot slots 0,2, constellation, hand, ...).
+- The MCU answers bad NICE messages with `{NICE}:` log records (readable with tools/mculog.py or sbproxy.py), which is the oracle for trying schedules safely. These commands are not in the tracker's whitelist yet.
