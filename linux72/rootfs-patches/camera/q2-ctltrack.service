@@ -1,0 +1,16 @@
+[Unit]
+Description=Quest 2 controller tracking from the tracking cameras (/dev/shm/q2cam -> /dev/shm/q2ctlpos)
+After=q2-camd.service q2-headtrack.service
+Wants=q2-camd.service
+ConditionPathExists=/usr/bin/q2ctltrack
+ConditionPathExists=!/var/lib/q2/nocameras
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/q2ctltrack
+Restart=on-failure
+RestartSec=10
+Nice=-5
+
+[Install]
+WantedBy=multi-user.target

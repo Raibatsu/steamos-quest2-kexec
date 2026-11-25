@@ -3,6 +3,7 @@ Description=Quest 2 tracking camera daemon (4x OV7251 -> /dev/shm/q2cam)
 After=q2-headtrack.service
 Wants=q2-headtrack.service
 ConditionPathExists=/usr/bin/q2camlive
+ConditionPathExists=!/var/lib/q2/nocameras
 
 [Service]
 Type=simple

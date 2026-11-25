@@ -304,3 +304,18 @@ after the slow commands (`rootfs-patches/camera/patch_delay.py`: init 1.5 s, sto
 `rootfs-patches/camera/q2-camd.service` stops the sensors with `ExecStop` (before the daemon is killed). Verified: daemon, abrupt kill, daemon, clean stop, daemon, and systemd start/stop/start all give 57-60 fps on 4 cameras.
 In `daemon` mode the "fps per camera" log line is always 0 (the counters live in the forked readers); use `tools/shmcheck.py` (reads the published-frame counters of /dev/shm/q2cam) instead.
 
+### Cameras start by themselves at boot (2026-11-25)
+`q2-camd` (q2camlive daemon, all four sensors -> /dev/shm/q2cam, 60 fps) and `q2-ctltrack` (/dev/shm/q2cam -> /dev/shm/q2ctlpos) are enabled; `q2-radios` (Wi-Fi/BT re-probe) too.
+Opt out with `touch /var/lib/q2/nocameras`. Verified over two reboots (kexec): after Stage 2 comes up all four cameras publish 60 fps with no manual step.
+**Gotcha that cost a reboot:** the rootfs mounts `/etc` as an overlay (`lowerdir=/etc, upperdir=/var/lib/overlays/etc/upper`) AFTER systemd has read its units. Unit files and `*.wants` links written to the
+running `/etc` land in the upper layer: they persist on the btrfs root and `systemctl is-enabled` says "enabled", but systemd does not start them at boot. Put them in the LOWER layer instead:
+`mount --bind / /mnt/rb` (non-recursive, shows the underlying /etc), copy the unit to `/mnt/rb/etc/systemd/system/` and symlink `../<unit>` in `/mnt/rb/etc/systemd/system/multi-user.target.wants/`, `umount /mnt/rb`.
+q2-headtrack and q2-buttons were already installed that way. Units: `rootfs-patches/camera/q2-camd.service`, `q2-ctltrack.service`, `rootfs-patches/radios/q2-radios.service`.
+Source-built binaries in /usr/bin: q2camlive (patched, see tools/q2camlive-mask-init.patch), q2blobs, q2ctltrack (upstream sources, unmodified); originals saved as `*.upstream-prebuilt`.
+
+### Controller tracking status
+Pipeline runs end to end (cameras -> q2blobs/q2ctltrack -> /dev/shm/q2ctlpos; SteamVR's q2hmd falls back to the arm model per hand after 1.5 s without camera data, so it is safe to run).
+No controller lock yet: the frames are very dark (max ~40/255 in a normal room) and q2ctltrack reports both hands "not seen". Controller LEDs strobe only when the MCU's camera
+scheduler ("NICE" slots: `syncboss_nice_config_slots`, `syncboss_nice_config_camera_set_slots`) and the controller LED config (`syncboss_input_set_led_config`, `..._set_led_ontime_us`) are set up, as Meta's trackingservice does;
+we only send camera init/start (default exposure) and put the radio in beacon mode. Next: read those functions in `meta-extract/files/odm_a/lib64/libsyncboss.so` and `odm_a/etc/trackingservice.cfg`.
+
