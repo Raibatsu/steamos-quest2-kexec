@@ -50,6 +50,8 @@ Measured on the headset (retail, locked bootloader, booted purely from RAM via `
 
 ---
 
+**Booting it (and shutting it down safely): see [`BOOT_NEXT_TIME.md`](BOOT_NEXT_TIME.md); `linux72/tools/boot_quest2.sh` automates it.**
+
 ## 🧠 Why Kexec on Quest 2 Was Hard (and How We Solved It)
 
 Booting a fresh kernel via `kexec` from Meta's running Horizon OS (Android 12L / Linux 4.19.157) without going through `abl`/`xbl` cold reset hits several hardware traps on Qualcomm SM8250 (`kona`):
