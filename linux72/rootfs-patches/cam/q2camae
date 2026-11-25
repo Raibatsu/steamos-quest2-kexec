@@ -1,0 +1,100 @@
+#!/usr/bin/python3
+# q2camae - camera auto-exposure for the Quest 2 tracking cameras, in Horizon's way (decoded 2026-11-26 from strace of Horizon's sensors HAL).
+# Horizon starts the cameras in a mode set up by SET_DATA 0xef (per-camera start exposure 5000 / gain 48) + 0xa3 {camera mask 0x0f, 20000} + commit 0x64, and then
+# its host-side auto-exposure sends SET_DATA 0xa1 (two 105-byte records {set mask, camera id 0x10+n, u16 exposure, u16 gain, @20 u32 1}) about 25 times a second,
+# ramping exposure 5000 -> 6500 and gain 48 -> 240 as the scene gets darker. Without it our cameras run dark (mean pixel ~4/255).
+# This daemon: (re)sends the 0xef/0xa3 setup whenever the cameras (re)start, then runs a 10 Hz loop per camera. The goal is the opposite of a photo AE: the controllers' LED
+# rings must stay SEPARATE dots, so it backs off fast when pixels saturate (the rings bloom into one blob at Horizon's 5000/48) and only slowly raises exposure when nothing in
+# the frame reaches a useful brightness. DEFAULT MODE IS FIXED exposure 1500 / gain 16: measured best (controllers tracked in ~39%/35% of solver steps vs 6% for the adaptive loop
+# and <1% for default settings), because a room lamp and the LED rings cannot be told apart by brightness. /var/lib/q2/ae.conf = "EXPOSURE GAIN" (fixed) or "auto [..]" (adaptive). One parameter s in 0..1: exposure = 200 * 32.5^s (200..6500, the MCU accepts values far below Horizon's 5000 start), gain 16 until
+# s = 0.6 then rising to 240. Config (optional) /var/lib/q2/ae.conf: "sat_pixels_max bright_threshold bright_pixels_min" (default "30 120 8").
+import mmap, os, struct, sys, time
+SBCAM = '/dev/shm/q2ht-sbcam'
+def log(m): print('q2camae: ' + m, flush=True)
+def send(lines):
+    for _ in range(100):
+        if not os.path.exists(SBCAM): break
+        time.sleep(0.05)
+    tmp = SBCAM + '.tmp.ae'
+    open(tmp, 'w').write('\n'.join(lines) + '\n'); os.rename(tmp, SBCAM)
+def msg(ty, seq, data): return (bytes([ty, seq & 0xff, len(data)]) + data).hex()
+seq = [0x80]
+def nseq(): seq[0] = 0x80 + ((seq[0] + 1) & 0x3f); return seq[0]
+def setup():
+    ef = bytes([0xef]) + b''.join(struct.pack('<IIBII', cid, 0, 0, 5000, 48) for cid in (0x10, 0x11, 0x12, 0x13))
+    a3 = bytes([0xa3]) + struct.pack('<II', 0x0f, 20000)
+    send([msg(3, nseq(), ef), msg(3, nseq(), bytes([0x64]))])
+    send([msg(3, nseq(), a3), msg(3, nseq(), bytes([0x64]))])
+    log('Horizon camera setup sent (0xef, 0xa3)')
+def a1(cid, exp, gain):
+    def rec(mask):
+        r = bytearray(105); struct.pack_into('<IIHH', r, 0, mask, cid, exp, gain); struct.pack_into('<I', r, 20, 1); return bytes(r)
+    return msg(3, nseq(), bytes([0xa1]) + rec(1) + rec(8)), msg(3, nseq(), bytes([0xa1]) + rec(4) + rec(2))
+def fixed_conf():
+    try:
+        w = open('/var/lib/q2/ae.conf').read().split()
+        if w and w[0] == 'auto': return None
+        return int(w[0]), int(w[1])
+    except Exception: return 1500, 16
+def conf():
+    try: a, b, c = open('/var/lib/q2/ae.conf').read().split()[:3]; return int(a), int(b), int(c)
+    except Exception: return 30, 120, 8
+import math
+def expo(s): return int(200 * math.exp(s * math.log(32.5)))
+def gain(s): return 16 + int(224 * max(0.0, (s - 0.6) / 0.4))
+LUT = {}
+def open_shm():
+    f = open('/dev/shm/q2cam', 'rb'); m = mmap.mmap(f.fileno(), 0, prot=mmap.PROT_READ)
+    magic, ver, ncam, W, H, NS, HS, ST = struct.unpack_from('<8I', m, 0)
+    return m, ncam, W, H, NS, HS, ST
+def stats(m, c, W, H, NS, HS, ST):
+    pub, = struct.unpack_from('<Q', m, 0x40 + c * 64)
+    if not pub: return pub, None
+    n = pub - 1; off = HS + (c * NS + n % NS) * ST
+    s1, = struct.unpack_from('<Q', m, off)
+    if s1 & 1: return pub, None
+    px = bytes(m[off + 64: off + 64 + W * H]); thr = conf()[1]
+    if thr not in LUT: LUT[thr] = bytes(1 if v >= thr else 0 for v in range(256))
+    return pub, (px.count(255), px.translate(LUT[thr]).count(1))
+def main():
+    while True:
+        try: m, ncam, W, H, NS, HS, ST = open_shm(); break
+        except Exception: time.sleep(2)
+    log('%d cameras %dx%d' % (ncam, W, H))
+    fixed_t = 0.0; last_pub = [0] * ncam; last_move = time.time(); s = [0.45] * ncam; sent = [None] * ncam; need_setup = True; n = 0
+    while True:
+        pubs = [struct.unpack_from('<Q', m, 0x40 + c * 64)[0] for c in range(ncam)]
+        moving = any(p > l for p, l in zip(pubs, last_pub))
+        if any(p < l for p, l in zip(pubs, last_pub)): need_setup = True          # the camera daemon restarted
+        if moving: last_move = time.time()
+        elif time.time() - last_move > 3: need_setup = True                          # frames stalled: the sensors will be restarted
+        last_pub = pubs
+        if need_setup and moving:
+            time.sleep(1.5); setup(); need_setup = False; sent = [None] * ncam; s = [0.45] * ncam; last_move = time.time()
+        fx = fixed_conf()
+        if moving and not need_setup and fx:
+            if time.time() - fixed_t > 3.0 or sent[0] != fx:
+                fixed_t = time.time(); sent = [fx] * ncam; lines = []
+                for c in range(ncam):
+                    x, y = a1(0x10 + c, fx[0], fx[1]); lines += [x, y]
+                for i in range(0, len(lines), 8): send(lines[i:i + 8])
+                n += 1
+                if n % 20 == 1: log('fixed exposure %d gain %d' % fx)
+        elif moving and not need_setup:
+            satmax, _thr, brightmin = conf(); lines = []
+            for c in range(ncam):
+                _, st = stats(m, c, W, H, NS, HS, ST)
+                if not st: continue
+                sat, bright = st
+                if sat > satmax: s[c] -= 0.12                    # blooming: back off fast
+                elif bright < brightmin: s[c] += 0.012           # nothing useful in the frame: creep up slowly
+                s[c] = min(1.0, max(0.0, s[c]))
+                q = (expo(s[c]) // 10 * 10, gain(s[c]) // 4 * 4)
+                if q != sent[c]:
+                    sent[c] = q; x, y = a1(0x10 + c, q[0], q[1]); lines += [x, y]
+            if lines:
+                for i in range(0, len(lines), 8): send(lines[i:i + 8])
+            n += 1
+            if n % 50 == 0: log('s=' + ' '.join('%.2f' % v for v in s) + ' last=' + str(sent))
+        time.sleep(0.1)
+main()
