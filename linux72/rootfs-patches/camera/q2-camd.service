@@ -1,0 +1,20 @@
+[Unit]
+Description=Quest 2 tracking camera daemon (4x OV7251 -> /dev/shm/q2cam)
+After=q2-headtrack.service
+Wants=q2-headtrack.service
+ConditionPathExists=/usr/bin/q2camlive
+
+[Service]
+Type=simple
+ExecStartPre=/bin/sleep 5
+ExecStart=/usr/bin/q2camlive daemon
+# Stop the sensors and clear the MCU's camera state BEFORE the daemon is killed: once the kernel powers the sensors down
+# the MCU can no longer stop them over I2C and stays "initialized" (next start: "OV7251 already initialized").
+ExecStop=/bin/sh -c 'test -e /run/q2headtrack.pid && { printf "2d00040f000000\n2f00040f000000\n" > /dev/shm/q2ht-sbcam.tmp && mv /dev/shm/q2ht-sbcam.tmp /dev/shm/q2ht-sbcam; for i in 1 2 3 4 5 6 7 8; do test -e /dev/shm/q2ht-sbcam || break; sleep 0.5; done; sleep 1; }; true'
+ExecStopPost=/bin/sh -c 'dmesg | grep -a -E "CAM_|q2-head: sbcam" | tail -n 300 > /var/log/q2/camd-dmesg.txt; true'
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

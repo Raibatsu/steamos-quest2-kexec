@@ -294,3 +294,13 @@ service in the stock partitions (read-only, `q2stockcam.py` parses the super par
 Gotchas: `q2camlive` needs `/run/q2headtrack.pid`; `sbproxy.py` removes it on exit, so restart `q2-headtrack` afterwards. The camera commands briefly stall the MCU link
 ("bad magic from MCU" x10, IMU pauses ~5 s, controllers drop) and recover on their own.
 
+### Camera sessions: why the second one failed, and the fix (2026-11-25)
+Symptom: the first camera session after a q2-headtrack restart streamed ~59 fps x 4, every later one got 0 frames (also after `q2camlive daemon` was killed). The MCU log (read passively with
+`tools/mculog.py` next to the live tracker) shows why: when the process dies the kernel powers the sensors down, the MCU can no longer stop them (`Failed writing I2C, reg=0x0100 ... Failed to stop streaming`),
+and the next `init` hits `ov7251.c: OV7251 already initialized` / `Camera ov7251[0x1] is not yet initialized`. A tracker restart resets the SPI link and the MCU's state, which is why that "fixed" it,
+and why a fresh stand-in process (sbproxy) always worked.
+Fix (all in place): every session is `2d`, `2f` (deinit), `2e`, `2c` and ends with `2d`, `2f`, each with mask `0f000000` (`tools/q2camlive-mask-init.patch`); the tracker's forwarder waits
+after the slow commands (`rootfs-patches/camera/patch_delay.py`: init 1.5 s, stop/deinit 0.4 s, start 0.3 s, others 0.05 s, because the MCU reads every sensor's chip ID over I2C during init);
+`rootfs-patches/camera/q2-camd.service` stops the sensors with `ExecStop` (before the daemon is killed). Verified: daemon, abrupt kill, daemon, clean stop, daemon, and systemd start/stop/start all give 57-60 fps on 4 cameras.
+In `daemon` mode the "fps per camera" log line is always 0 (the counters live in the forked readers); use `tools/shmcheck.py` (reads the published-frame counters of /dev/shm/q2cam) instead.
+
