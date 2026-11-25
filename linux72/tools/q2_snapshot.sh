@@ -166,7 +166,7 @@ trace_restart() {
   have strace || { echo "no strace" >&2; return 1; }
   : > "$OUT/strace.pids"; : > "$OUT/trace_pids"
   getprop > "$OUT/props_before" 2>/dev/null
-  svcs=$(getprop | sed -n 's/^\[init\.svc\.\(.*\)\]: \[running\]$/\1/p' | grep -i -E 'sensors|trackingservice|tracking$|vrdevicemanager')
+  svcs=$(getprop | sed -n 's/^\[init\.svc\.\(.*\)\]: \[running\]$/\1/p' | grep -i -E 'oculus.*sensors|^trackingservice$')
   echo "$svcs" > "$OUT/svc_names"
   # binary names to watch (what pidof matches)
   for b in trackingservice vendor.oculus.hardware.sensors@1.0-service; do
