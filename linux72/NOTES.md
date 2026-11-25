@@ -322,12 +322,18 @@ heading from the cameras") and falls back to the arm model after 1.5 s without c
 - Weak point is lock *stability*: frames are very dark (max ~40/255 indoors, default exposure) and the solver loses hands often ("few dots"); in a 40 s window with the controllers held up the left locked in 6 of 40 one-second
   windows, the right in 3 (hand placement was not controlled). More exposure/gain, i.e. a NICE schedule, is the lever.
 
-What is decoded of Meta's NICE (camera scheduler) protocol, from `libsyncboss.so` static analysis (`odm_a/lib64`, in meta-extract/, not in git):
-- `syncboss_nice_config_slots(ctx, slots, n)`, n <= 8: packs **17 bytes per slot** = `[0]=u8 a, [1:5]=0, [5:9]=0, [9:13]=u32 b, [13:15]=u16 c, [15:17]=u16 d (d < 0x800, masked 0x7ff)` from 16-byte input entries
-  (in[0]=u8 a, in[4]=u32 b, in[8]=u16 c, in[12]=u32 d), sends **cmd 0xef** with the 17n-byte buffer, then **cmd 0x64** with no payload (commit/apply). Sent through `send(ctx, cmd, payload, len, wait_reply=1, timeout 15000 ms)`.
-  Field meanings are not decoded yet (nice_config_camera_set_slots builds them from 168-byte per-slot camera descriptions; it compares frame periods against 8333 us and 16666 us, i.e. 120/60 Hz).
-- `syncboss_nice_get_exposure_range(ctx, cam, rate, out)` queries the MCU with **cmd 0x49** (request payload byte 0x0c plus the camera id) and returns min/max exposure.
-- `syncboss_camera_v2_set_frame_config_v2` sends cmd 0xb1, `set_gamma_compression` cmd 0x25 (init loads 76-entry gamma tables from files). Most other camera setters and the controller LED functions
-  (`syncboss_input_set_led_config`, `..._set_led_ontime_us`) go through a command-queue layer (worker thread, `0x68ca4`/`0x5aca0`) and need more tracing.
-- Meta's own config: `odm_a/etc/trackingservice.cfg` (`nice_constellation = "jedi"`), `odm_a/etc/cameramuxmode/configv2.json` (4 slots 0:0..3:0 over cameras 0-3; purposes iot slots 0,2, constellation, hand, ...).
-- The MCU answers bad NICE messages with `{NICE}:` log records (readable with tools/mculog.py or sbproxy.py), which is the oracle for trying schedules safely. These commands are not in the tracker's whitelist yet.
+What is decoded of Meta's NICE (camera scheduler) protocol (2026-11-25; libsyncboss.so static analysis + the MCU's own log strings and replies as the oracle):
+- **Framing:** the MCU's other "commands" are registers of the generic **SET_DATA (type 3)** message: `{0x03, seq, len, reg, payload...}`. Sending 0x27/0x49/0xef/0x64 as raw message types is rejected with status `0x0102`
+  (that is also what the MCU console, reg 0x27 "shell", returns: it is disabled in this production firmware build, so no text console). Camera start/stop/init/deinit (0x2c/0x2d/0x2e/0x2f) ARE raw types.
+- **Schedule = SET_DATA reg 0xc7**, one 147-byte block per camera set, then **SET_DATA reg 0x64** (no payload) to commit; the MCU applies it at camera start. Block: `[0]=camera set id, [1]=n slots (<=8), [2]=n sets,
+  [3 + 17*i]= slot i, [139:143]=u32 frame period us (8333 = the NICE tick, firmware rounds to 8332), rest zero`. Slot (17 bytes, little endian): `u8 tag, u32 PERIOD us, u32 0, u32 CAPABILITY mask, u16 gain, u16 exposure us (<0x800)`.
+  Capability bits (firmware print order): 0 Depth, 1 Constellation, 2 Hand LED, 3 **Unused** (setting it, e.g. mask 0x0f, makes the MCU assert "No slots available to schedule without the unused capability set"), 4 Droppable, 5 ETFT, 6 Eye LED, 7 Eye2 LED, 8 Face LED, 9 Body LED.
+- **Valid camera sets are 1 and 3** ("No NICE handles found with camera_set 0 / 2" otherwise). Constraints reported by the MCU: each slot period >= 9139 us (independent of exposure), and the SUM of slot periods must be a multiple of the 8332 us tick
+  ("Composite period 9266us is not aligned on nice period 8332us"), so at 60 Hz only a single 16664 us slot is possible at full resolution (Meta's table pairs 9266+7400 and 5200+11466 are for other frame configs). Exposure above ~500-1000 us makes the slot "unused" (assert) - 500 us accepted, 1000 us rejected; gain 128 accepted.
+- Library helper `syncboss_nice_get_exposure_range` = GET_DATA-style reg 0x49 (request 0x0c + camera id): returns 0x0102 here. Table (type -> period class, slot period): 1: 8333/9266, 2: 8333/7400, 3: 16666/5200, 4: 16666/11466.
+- Not decoded: controller LED config (`syncboss_input_set_led_config`, `..._set_led_ontime_us`, command-queue layer at 0x5aca0/0x68ca4), per-camera exposure/gain registers, the frame config (reg 0xb1) that sets the minimum slot period.
+- **Result of the A/B controller test (controllers held steady ~40 cm in front, 60 s each):** default MCU schedule: LEFT locked 14 s, RIGHT 18 s (196 LED frames/s, 1.2 search tries/s); my single 16664 us slot with Depth|Constellation, exposure 500, gain 16:
+  LEFT 0 s, RIGHT 0 s (0.1 tries/s). The schedule is accepted but makes tracking WORSE, and brightness (mean ~3-4/255, dominated by the sensor black level in a dark room) did not change with gain 128. So the NICE switch (`/var/lib/q2/nice`,
+  read by q2camlive, off by default) stays OFF. In real VR use the hands locked only ~3% of the time, versus 23-30% when held still in front of the cameras, so camera field of view / hand placement during play is probably the bigger problem.
+- Tools: `tools/sbproxy_nice.py` (stand-in forwarder that injects extra frames before camera start), `tools/nicetest.sh`, `tools/sbshell.py` (shell attempt, rejected), `tools/abtest.py` (lock statistics), `tools/pgmstats.py`.
+
