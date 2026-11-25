@@ -38,7 +38,10 @@ adb shell "su -c 'am broadcast -a com.oculus.vrpowermanager.prox_close'" >/dev/n
 PW=$(rsu 'dumpsys power | grep -E "mWakefulness=|mScreenState="')
 echo "$PW" | tr -s ' ' | head -4
 echo "$PW" | grep -q 'mWakefulness=Awake' || die "display not awake (mWakefulness) - put the headset on / cover the proximity sensor and retry"
-echo "$PW" | grep -q 'mScreenState=ON'    || die "display not ON (mScreenState) - wake it and retry"
+# this Horizon build has no mScreenState line in `dumpsys power`; the panel state is "Display State=ON" in `dumpsys display`
+DS=$(rsu 'dumpsys display | grep -E "Display State=|mScreenState="')
+echo "$PW$DS" | grep -q -E 'mScreenState=ON|Display State=ON' || die "display not ON (no 'Display State=ON' / mScreenState=ON) - wake it and retry"
+echo "display state: $(echo "$DS" | grep -o -E 'Display State=[A-Z]+|mScreenState=[A-Z]+' | sort | uniq -c | tr '\n' ' ')"
 for s in $(rsu 'getprop' | grep -o 'init\.svc\.[^]]*\(adsprpcd\|cdsprpcd\|trackingservice\|trackingfidelityservice\)[^]]*' | sed 's/^init\.svc\.//' | sort -u); do
   echo "stopping $s"; rsu "stop $s" >/dev/null
 done
