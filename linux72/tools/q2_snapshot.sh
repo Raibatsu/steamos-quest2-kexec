@@ -9,12 +9,14 @@
 #                                                 tone if tinyplay/aplay exist, capture the log, clear the debug flags again
 #   q2_snapshot.sh ctl <outdir> [secs]            watch the controller/tracking stack for [secs]: processes with /dev/syncboss* open, their syscalls (strace if
 #                                                 present, else ftrace syscall events by pid), logcat for tracking/syncboss tags, syncboss dynamic debug
+#   q2_snapshot.sh trace <outdir> <secs> <regex>   strace (pushed to /data/local/tmp/strace) every process whose name/cmdline matches the regex, all ioctl/read/write data
 #   q2_snapshot.sh dyndbg-off                     clear every flag set by this script
 # Nothing here writes to any partition or device register. Output stays on the device until the host pulls it (see horizon_probe.sh); never commit it.
 OUT=${2:-/data/local/tmp/q2snap}
 mode=$1
 mkdir -p "$OUT" 2>/dev/null
 have() { command -v "$1" >/dev/null 2>&1; }
+[ -x /data/local/tmp/strace ] && PATH=$PATH:/data/local/tmp
 cap() { name=$1; shift; { "$@"; } > "$OUT/$name" 2>&1; }       # cap <file> <command...>
 capsh() { name=$1; shift; sh -c "$*" > "$OUT/$name" 2>&1; }      # capsh <file> '<shell string>'
 DBG=/sys/kernel/debug
@@ -115,12 +117,31 @@ ctl() {
   echo "ctl trace: $OUT ($(ls "$OUT" | wc -l) files)"
 }
 
+# trace <secs> <name-regex> : strace every process whose comm/cmdline matches, with generous string sizes (ioctl/read/write data included)
+trace() {
+  secs=${1:-20}; re=${2:-trackingservice}
+  have strace || { echo "no strace on this system (push tools/strace-aarch64 to /data/local/tmp/strace)" >&2; return 1; }
+  SP=''
+  for p in /proc/[0-9]*; do
+    pid=$(basename $p); n="$(cat $p/comm 2>/dev/null) $(tr '\0' ' ' < $p/cmdline 2>/dev/null)"
+    case "$n" in *strace*|*q2_snapshot*) continue ;; esac
+    echo "$n" | grep -Eq "$re" || continue
+    echo "$pid $n" >> "$OUT/trace_pids"
+    strace -f -ttt -s 512 -xx -e trace=openat,ioctl,read,write,pread64,pwrite64,sendmsg,recvmsg,writev,readv -p $pid -o "$OUT/strace_$pid" 2>"$OUT/strace_$pid.err" & SP="$SP $!"
+  done
+  [ -n "$SP" ] || { echo "no process matching '$re'" >&2; return 1; }
+  sleep "$secs"; kill $SP 2>/dev/null; sleep 1
+  capsh controls_after 'have() { command -v $1 >/dev/null 2>&1; }; have tinymix && tinymix 2>&1'
+  echo "trace: $(wc -l < "$OUT/trace_pids") processes, $(du -sh "$OUT" | cut -f1)"
+}
+
 case "$mode" in
   snapshot) snapshot ;;
   dyndbg) shift 2; for p in "$@"; do dd_set "$p"; done ;;
   dyndbg-off) dd_off ;;
   audio) audio "$3" ;;
   ctl) ctl "$3" ;;
+  trace) trace "$3" "$4" ;;
   *) sed -n 2,17p "$0"; exit 1 ;;
 esac
 echo "done: $OUT"

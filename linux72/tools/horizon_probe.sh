@@ -43,6 +43,7 @@ if [ "$sys" = horizon ]; then
   adb shell "rm -rf $R; mkdir -p $R" >/dev/null
   adb push "$HERE/q2_snapshot.sh" /data/local/tmp/q2_snapshot.sh >/dev/null || die "push script"
   adb push "$DEST/tone.wav" $R/tone.wav >/dev/null
+  [ -x "$B/tools/strace-aarch64" ] && adb push "$B/tools/strace-aarch64" /data/local/tmp/strace >/dev/null && adb shell "su -c 'chmod 755 /data/local/tmp/strace'"
   echo "running q2_snapshot.sh $mode on Horizon (this can take a minute)..."
   timeout 600 adb shell "su -c 'sh /data/local/tmp/q2_snapshot.sh $mode $R $ARGS'" 2>&1 | tail -5
   adb pull $R/. "$DEST/" >/dev/null 2>&1 || die "pull results"
