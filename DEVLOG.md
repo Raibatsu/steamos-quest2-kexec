@@ -2222,3 +2222,21 @@ that device, not that every DSP was verified stopped.
 
 No hardware was touched in this entry. It is read-only analysis of the
 active loader and the pinned kernel source.
+
+## 2026-11-25 — merge with upstream's linux72 layer, radios, battery, cameras
+
+Summary of the day (details and gotchas are in `linux72/NOTES.md`):
+
+- **Upstream merge.** `linux72/tools/apply_upstream_layer.sh` applies URFAVF3MBOY/quest2-steamos' kernel layer (Android compat, Spectra camera
+  drivers, SyncBoss) to a clean tree; `patches/kexec-over-upstream.patch` holds only our kexec changes. We keep our own panel driver (upstream's
+  assumes the bootloader left the panel lit, false after kexec).
+- **Eye alignment.** Instant-feedback tool `tools/q2calib.c`; findings on picture shift / eye separation / lens centre (units are tenths of a mm).
+- **Battery, Wi-Fi, Bluetooth** work (see README). Audio is not possible without codec drivers.
+- **Cameras.** Root cause of "no frames": the SyncBoss MCU wants a 4-byte camera mask on start/stop/init/deinit (`0x2c/2d/2e/2f`), read from Meta's
+  `libsyncboss.so`. Sessions must start with stop+deinit and end with stop+deinit or the MCU stays "initialized" after the sensors lose power.
+  Camera sensors 1 and 3 had swapped clock pin-mux states in the DT. `q2-camd` and `q2-ctltrack` start at boot (units belong in the LOWER /etc
+  layer: the /etc overlay is mounted after systemd reads units).
+- **Stock userspace** (vendor/odm/system_ext) was read out read-only with `tools/q2stockmount.py` and kept OUT of git (Meta binaries).
+- **NICE schedule** decoded natively (SET_DATA regs `0xc7` + `0x64`, camera sets 1 and 3); accepted by the MCU but worse for controller lock, so it is
+  switched off (`/var/lib/q2/nice`). Open: controller LED config, frame config, why in-VR lock is only ~3 %.
+- Hard rules unchanged: no UFS writes, no device logs/serials/DTBs/firmware in git, never the SWD/firmware-update paths.

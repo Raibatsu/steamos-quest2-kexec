@@ -8,7 +8,7 @@
 
 ---
 
-## ✅ Status (2026-11-24): Linux 7.2 + SteamOS + SteamVR boot and run stably on the locked Quest 2
+## ✅ Status (2026-11-25): Linux 7.2 + SteamOS + SteamVR boot and run stably on the locked Quest 2; Wi-Fi, Bluetooth, battery gauge and all four tracking cameras now work
 
 Measured on the headset (retail, locked bootloader, booted purely from RAM via `quest_kexec.ko`; Meta's boot/UFS partitions untouched):
 
@@ -21,7 +21,13 @@ Measured on the headset (retail, locked bootloader, booted purely from RAM via `
 | Fan | ✅ PWM channel (LPG `0xbd00`) at 100 % duty: hottest sensor ~60 C under SteamVR (was 86-90 C without it) |
 | RAM given to Linux | ~3.0 GB at the first 4.5 GB claim attempt (dry runs reached 3.7 GB; see `NOTES.md`) |
 | Headset power/volume buttons | ✅ kernel events + `q2buttons` (needs the unit + device-name patch in `NOTES.md`) |
-| Touch controllers (radio) | ✅ both paired controllers connect and stream (~500 Hz IMU each, buttons, stick, trigger/grip, battery); see the fix in `linux72/NOTES.md`. Positional 6DoF tracking (cameras) is not implemented yet |
+| Touch controllers (radio) | ✅ both paired controllers connect and stream (~500 Hz IMU each, buttons, stick, trigger/grip, battery); see the fix in `linux72/NOTES.md` |
+| Wi-Fi (QCA6390, ath11k over PCIe) | ✅ `wlan0` up, firmware loads, scans find networks (not yet associated to one). Firmware is copied from linux-firmware (not in the repo) |
+| Bluetooth (QCA6390, hci_qca on UART6) | ✅ `hci0` managed by BlueZ, scan finds devices; address is a locally administered placeholder set in the device tree |
+| Headset battery | ✅ TI BQ27Z561 gauge reports charge, voltage, temperature. No charger status (the Qualcomm SMB5 charger has no mainline driver) |
+| Tracking cameras (4x OV7251) | ✅ all four stream ~60 fps; start automatically at boot (`q2-camd`); needs the MCU command sequence described in `linux72/NOTES.md` (camera mask + init/deinit) |
+| Controller position from the cameras | 🔄 works natively (`q2-ctltrack`, 6DoF, < 1 px error) but intermittent: ~25 % lock with the controllers held up in front, ~3 % during a VR session. Falls back to the arm model per hand. Tuning is open |
+| Audio | ❌ no sound card: the codecs (AKM AK4331, C-Media CM710x DSP) have no mainline driver |
 
 **What was wrong (so it can be reproduced or reused):** after kexec, Linux randomly hung a core (0.6 s to 60 s after boot, or ~9 s into SteamVR). The cause is not the GPU or idle states: Horizon's hypervisor/TrustZone leaves random 2 MiB RAM windows assigned away, and merely reading one hangs the core. The windows differ on every boot. **Fix:** the loader (`claim_mb=N`) hands Linux only RAM that Horizon itself can allocate or migrate, via a patched placeholder in the DTB memory node. Details, tools and operating notes: [`linux72/NOTES.md`](linux72/NOTES.md).
 
@@ -38,8 +44,8 @@ Measured on the headset (retail, locked bootloader, booted purely from RAM via `
 | **Internal UFS 2.1 Storage (6 LUNs)** | ✅ Verified | ✅ Verified | `1d84000.ufshc` (`sd_mod` `/dev/sda`..`/dev/sdf`, Gear-3 rate-B PHY init) |
 | **Adreno 650 GPU + GMU + Command Ring** | ✅ Verified (`kgsl-3d0`) | ✅ Verified (`drm/msm`) | `/dev/dri/renderD128` (`gpu_id=650`, `587 MHz`, `a650_sqe.fw` + `a650_gmu.bin` + signed `a650_zap.mdt`, `PKT7(CP_MEM_WRITE)` ring-0 fence pass + cross-kexec PDC/RSC sequence clear) |
 | **Dual-DSI 1920×3664 JDI VR Display** | ✅ Verified (`msm_drm`) | ✅ Verified (`dpu1` + `dsi0/1`) | Cold rail bring-up (`qcom-pm8150l-lcdb` `±5.7 V`, `vreg_l14a_1p8` `1.8 V`, `vreg_l11c_3p3` `3.3 V` BLU MCU, `panel-oculus-hollywood-jdi`), stereo side-by-side (`1832×1920` per eye @ `rot=270`) visual confirmation |
-| **QCA6390 Wi-Fi & Bluetooth** | ✅ Verified (`wlan0` + `ttyHS0`) | 🔄 Next (Stage 2) | PCIe + UART HCI (`htbtfw20.tlv` / `htnv20.bin`) verified in Stage 5; plumbing into 7.2 Stage 2 next |
-| **Kona ADSP (`pas_id=1`) & Audio** | ✅ Verified (`apr_audio_svc`) | 🔄 Next (Stage 2) | PIL auth (`PAS_INIT_IMAGE`) & GLINK up; mainline `qdsp6` in progress |
+| **QCA6390 Wi-Fi & Bluetooth** | ✅ Verified (`wlan0` + `ttyHS0`) | ✅ Verified (ath11k + hci_qca) | PCIe0 + UART6 behind the mainline `qca6390-pmu` power sequencer; firmware re-probed after the Stage 2 handoff by `q2-radios` |
+| **Kona ADSP (`pas_id=1`) & Audio** | ✅ Verified (`apr_audio_svc`) | ❌ No sound card | ADSP boots; the speaker/mic codecs (AK4331, CM710x) have no mainline driver |
 | **Stage 2 SteamOS Rootfs (`switch_root`)** | 🔄 Ready | 🔄 In Progress | Btrfs + OverlayFS + NBD + USB Mass Storage compiled in; Stage 2 boot next |
 
 ---
