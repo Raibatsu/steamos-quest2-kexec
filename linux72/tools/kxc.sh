@@ -14,7 +14,9 @@ if [ "$2" = dry ]; then
   lsmod | grep -q quest_kexec && rmmod quest_kexec && echo released
   exit 0
 fi
-for pb in 130 100 140 160 180; do
+# candidate payload windows (units of 0x1000000: 130 = 0x130000000). Which one is free varies per Horizon boot: the real run claims the 56 MiB window first and
+# fails with -16 if a page in it is pinned (or "unsupported pageblock type" if it is unmovable); 2026-11-25: 130, 110, 100, 140-180 failed, 120 worked.
+for pb in ${BASES:-130 120 110 150 140 160 170 190 1a0 100 180}; do
   insmod ./quest_kexec.ko $COMMON dtb=/data/local/tmp/boot-$pb-$SUF.dtb payload_base=0x${pb}000000 shutdown_dsps=1 watchdog_recovery=1 preserve_watchdog=1 execute=1 2>&1
   echo "base $pb: $(dmesg | grep quest_kexec | tail -1)"
   sleep 3

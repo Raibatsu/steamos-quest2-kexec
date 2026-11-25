@@ -28,6 +28,11 @@ Horizon, as root: wake the display (`am broadcast -a com.oculus.vrpowermanager.p
 then `sh /data/local/tmp/kxc.sh 4608 dry fan`, then `sh /data/local/tmp/kxc.sh 4608`. In Stage 1 (`telnet 10.42.0.2`): `busybox nbd-client 10.42.0.1 10809 /dev/nbd0`, `mount -t btrfs -o rw /dev/nbd0 /mnt/newroot`, write
 `/run/stage2.sh` (four `mount --move` for proc/sys/dev/run, then `exec switch_root /mnt/newroot /sbin/init`) and make it executable; Stage 2 answers on port 2323.
 
+## If the jump fails with `staging/validation failed: -16`
+Seen on 2026-11-25. The real run first claims a 56 MiB payload window; if any page in it is pinned by Horizon (or the window is not movable RAM) it returns -16, and **the dry run cannot warn you** because it skips that step.
+Which window is free changes with every Horizon boot (that day: 130, 110, 100, 140, 160, 180 failed; 120 worked). `kxc.sh` now tries eleven windows (`BASES="..."` overrides; each needs a `dtb/boot-<base>-fan.dtb`, made with
+`BASES="110 120 ..." make_claim_dtbs.sh ...`). `am kill-all` plus repeated `drop_caches`/`compact_memory` is part of the prep now. If every window still fails, reboot Horizon, re-run Singularity and boot straight away (a long-running Horizon fragments memory).
+
 ## Rebuilding the bundle (after changing the kernel or the DTS)
 Build in `/mnt/HDD/quest2-linux72/linux-up` (`make O=../out-up ... Image qcom/sm8250-oculus-hollywood-kexec.dtb`), copy `Image` and the DTB into the bundle, then
 `linux72/tools/make_claim_dtbs.sh <dtb> <Image> <initramfs> /mnt/HDD/quest2-boot/dtb fan` (it bakes in the initramfs address, so rerun it whenever the Image or initramfs changes) and regenerate `MANIFEST.sha256`.

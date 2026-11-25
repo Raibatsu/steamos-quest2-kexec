@@ -45,7 +45,7 @@ echo "display state: $(echo "$DS" | grep -o -E 'Display State=[A-Z]+|mScreenStat
 for s in $(rsu 'getprop' | grep -o 'init\.svc\.[^]]*\(adsprpcd\|cdsprpcd\|trackingservice\|trackingfidelityservice\)[^]]*' | sed 's/^init\.svc\.//' | sort -u); do
   echo "stopping $s"; rsu "stop $s" >/dev/null
 done
-rsu 'echo 3 > /proc/sys/vm/drop_caches; echo 1 > /proc/sys/vm/compact_memory' >/dev/null
+rsu 'am kill-all; sync; for i in 1 2 3; do echo 3 > /proc/sys/vm/drop_caches; echo 1 > /proc/sys/vm/compact_memory; sleep 2; done' >/dev/null
 
 step "4/8 push the bundle to /data/local/tmp (kxc.sh expects these names)"
 adb push "$B/Image-linux72"             /data/local/tmp/Image-linux72 >/dev/null || die "push Image"
@@ -64,6 +64,7 @@ want=$(grep ' initramfs-linux72.cpio.gz$' "$B/MANIFEST.sha256" | cut -d' ' -f1);
 echo "files on the headset match the bundle"
 
 step "5/8 dry run: claim $CLAIM_MB MB from Horizon, log the ranges, release them (no jump)"
+echo "(note: the dry run does NOT claim the 56 MiB payload window, so it can pass while the real jump fails with -16; kxc.sh then tries more windows)"
 rsu "sh /data/local/tmp/kxc.sh $CLAIM_MB dry fan" | tail -12
 if [ "$GO" != 1 ]; then
   echo; echo "Prepared and dry-run done. Check the claimed ranges above (expect ~2.4-3 GB claimed), then run:  $0 --go"; exit 0

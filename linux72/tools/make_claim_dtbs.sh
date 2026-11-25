@@ -12,7 +12,7 @@ import struct,sys
 b=open('$IMG','rb').read(64); off,size=struct.unpack_from('<QQ',b,8); print((off+size+4095)&~4095)")
 cells=$(python3 -I -c 'print(" ".join(["51a0c0de","c0de0000","0","0"]*1024))')
 mkdir -p "$OUT"
-for b in 100 130 140 160 180; do
+for b in ${BASES:-100 130 140 160 180}; do   # BASES="110 120 ..." overrides the candidate payload bases (units of 0x1000000, i.e. 130 = 0x130000000)
   f="$OUT/boot-$b-$SUF.dtb"; cp "$DTB" "$f"
   s=$((0x${b}000000 + RDOFF)); e=$((s + RS))
   fdtput -t u "$f" /chosen linux,initrd-start $((s>>32)) $((s&0xffffffff))
