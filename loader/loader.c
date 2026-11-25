@@ -68,6 +68,8 @@ static unsigned long long payload_base;
 static unsigned int claim_mb;
 static unsigned int claim_step_kb = 4096;
 static bool claim_relax;
+static unsigned int claim_passes = 1;
+static unsigned int claim_retry_ms = 150;
 static unsigned long long claim_lo = 0x80000000ULL, claim_hi = 0x200000000ULL;
 static struct { u64 lo, hi; } claimed[QKX_MAX_EXTRA];
 static unsigned int nr_claimed;
@@ -106,7 +108,11 @@ MODULE_PARM_DESC(ram_bytes, "With validate_ram only: aligned claim length, maxim
 module_param(claim_mb, uint, 0);
 MODULE_PARM_DESC(claim_mb, "Extra movable RAM (MiB) to claim from Horizon and hand to Linux via the DTB memory node placeholder");
 module_param(claim_step_kb, uint, 0);
-MODULE_PARM_DESC(claim_step_kb, "Claim granularity in KiB (power of two, 2048..4096); 2048 recovers free 2 MiB halves of refused pageblocks");
+MODULE_PARM_DESC(claim_step_kb, "Claim granularity in KiB (power of two, 512..4096); smaller recovers free chunks of refused pageblocks");
+module_param(claim_passes, uint, 0);
+MODULE_PARM_DESC(claim_passes, "Retry passes over the whole RAM range (a refusal can be transient); stops early when a pass claims nothing new");
+module_param(claim_retry_ms, uint, 0);
+MODULE_PARM_DESC(claim_retry_ms, "Sleep between claim passes (ms)");
 module_param(claim_relax, bool, 0);
 MODULE_PARM_DESC(claim_relax, "Also try UNMOVABLE/RECLAIMABLE pageblocks (never CMA); pinned or in-use pages still make alloc_contig_range refuse");
 module_param(claim_lo, ullong, 0);
@@ -573,8 +579,9 @@ static int qkx_claim_destination(void)
 	return 0;
 }
 
-/* Claim extra movable pageblocks (migrating Horizon's movable pages away). A block that holds
- * a pinned/protected page cannot be isolated, so it is skipped and never read. */
+/* Claim extra RAM from Horizon (migrating Horizon's movable pages away, taking free chunks out of unmovable/reclaimable blocks when claim_relax). A step that holds a
+ * pinned/protected page cannot be isolated, so it is skipped and never read. v2 (2026-11-26): steps down to 512 KiB, several retry passes (a refusal can be transient:
+ * migration targets, pcp lists), a census of pageblock types and of refusal reasons, and trimming to what the DTB placeholder can describe. */
 static int qkx_claim_extra(void)
 {
 	int (*claim)(unsigned long, unsigned long, unsigned int, gfp_t) =
@@ -586,51 +593,104 @@ static int qkx_claim_extra(void)
 		(void *)lookup("get_pfnblock_flags_mask");
 	unsigned long step = (unsigned long)claim_step_kb >> (PAGE_SHIFT - 10);
 	unsigned long dlo = destination_lo >> PAGE_SHIFT, dhi = destination_hi >> PAGE_SHIFT;
-	unsigned long end = claim_hi >> PAGE_SHIFT, pfn;
+	unsigned long end = claim_hi >> PAGE_SHIFT, base_pfn, pfn, nbits, bit, *bm;
 	unsigned long type;
 	u64 target = (u64)claim_mb << 20, got = 0;
-	unsigned int tried = 0, failed = 0, i;
+	unsigned int tried[4] = { 0 }, okc[4] = { 0 }, census[4] = { 0 }, e_busy = 0, e_nomem = 0, e_inval = 0, e_other = 0, skip_res = 0, pass, i;
+	unsigned int limit = min_t(unsigned int, QKX_MAX_EXTRA, QKX_MEM_ENTRIES - 2);
+	int ret;
 
 	if (!claim || !release || !block_flags)
 		return -ENOENT;
-	if (claim_step_kb < 2048 || claim_step_kb > 4096 || (claim_step_kb & (claim_step_kb - 1)))
+	if (claim_step_kb < 512 || claim_step_kb > 4096 || (claim_step_kb & (claim_step_kb - 1)))
 		return -EINVAL;
 	release_extra = release;
-	for (pfn = ALIGN(claim_lo >> PAGE_SHIFT, step); pfn + step <= end && got < target; pfn += step) {
-		struct page *first, *last;
-		u64 lo = (u64)pfn << PAGE_SHIFT, hi = (u64)(pfn + step) << PAGE_SHIFT;
+	base_pfn = ALIGN(claim_lo >> PAGE_SHIFT, step);
+	nbits = end > base_pfn ? (end - base_pfn) / step + 1 : 1;
+	bm = kvcalloc(BITS_TO_LONGS(nbits), sizeof(long), GFP_KERNEL);
+	if (!bm)
+		return -ENOMEM;
 
-		if (pfn < dhi && pfn + step > dlo)
-			continue;
-		if (!pfn_valid(pfn) || !pfn_valid(pfn + step - 1))
-			continue;
-		first = pfn_to_page(pfn);
-		last = pfn_to_page(pfn + step - 1);
-		if (PageReserved(first) || page_zone(first) != page_zone(last))
-			continue;
-		type = block_flags(first, pfn, PB_migrate_end, MIGRATETYPE_MASK);
-		if (type != MIGRATE_MOVABLE &&
-		    !(claim_relax && (type == MIGRATE_UNMOVABLE || type == MIGRATE_RECLAIMABLE)))
-			continue;
-		tried++;
-		if (claim(pfn, pfn + step, MIGRATE_MOVABLE, GFP_KERNEL)) {
-			failed++;
-			continue;
+	for (pass = 0; pass < (claim_passes ? claim_passes : 1) && got < target; pass++) {
+		u64 got_before = got;
+
+		for (pfn = base_pfn; pfn + step <= end && got < target; pfn += step) {
+			struct page *first, *last;
+
+			bit = (pfn - base_pfn) / step;
+			if (test_bit(bit, bm))
+				continue;
+			if (pfn < dhi && pfn + step > dlo)
+				continue;
+			if (!pfn_valid(pfn) || !pfn_valid(pfn + step - 1))
+				continue;
+			first = pfn_to_page(pfn);
+			last = pfn_to_page(pfn + step - 1);
+			if (PageReserved(first) || page_zone(first) != page_zone(last)) {
+				if (!pass)
+					skip_res++;
+				continue;
+			}
+			type = block_flags(first, pfn, PB_migrate_end, MIGRATETYPE_MASK);
+			i = type == MIGRATE_MOVABLE ? 0 : type == MIGRATE_UNMOVABLE ? 1 : type == MIGRATE_RECLAIMABLE ? 2 : 3;
+			if (!pass)
+				census[i]++;
+			if (type != MIGRATE_MOVABLE &&
+			    !(claim_relax && (type == MIGRATE_UNMOVABLE || type == MIGRATE_RECLAIMABLE)))
+				continue;
+			tried[i]++;
+			ret = claim(pfn, pfn + step, MIGRATE_MOVABLE, GFP_KERNEL | __GFP_NOWARN);
+			if (ret) {
+				if (ret == -EBUSY) e_busy++; else if (ret == -ENOMEM) e_nomem++; else if (ret == -EINVAL) e_inval++; else e_other++;
+				continue;
+			}
+			okc[i]++;
+			set_bit(bit, bm);
+			got += (u64)step << PAGE_SHIFT;
 		}
-		if (nr_claimed && claimed[nr_claimed - 1].hi == lo) {
+		pr_info("quest_kexec: claim pass %u: %llu MiB so far (+%llu MiB)\n", pass + 1, got >> 20, (got - got_before) >> 20);
+		if (got == got_before)
+			break;
+		if (got < target && pass + 1 < claim_passes)
+			msleep(claim_retry_ms);
+	}
+
+	/* build the merged range list from the bitmap, then trim to what the DTB can hold (release the smallest first) */
+	nr_claimed = 0;
+	for (bit = 0; bit < nbits; bit++) {
+		u64 lo, hi;
+
+		if (!test_bit(bit, bm))
+			continue;
+		lo = (u64)(base_pfn + bit * step) << PAGE_SHIFT;
+		hi = lo + ((u64)step << PAGE_SHIFT);
+		if (nr_claimed && claimed[nr_claimed - 1].hi == lo)
 			claimed[nr_claimed - 1].hi = hi;
-		} else if (nr_claimed < QKX_MAX_EXTRA) {
+		else if (nr_claimed < QKX_MAX_EXTRA) {
 			claimed[nr_claimed].lo = lo;
 			claimed[nr_claimed].hi = hi;
 			nr_claimed++;
 		} else {
-			release(pfn, step);
-			break;
+			release(base_pfn + bit * step, step);
+			got -= (u64)step << PAGE_SHIFT;
 		}
-		got += hi - lo;
 	}
-	pr_info("quest_kexec: extra claim: %llu MiB in %u range(s); %u blocks tried, %u refused\n",
-		got >> 20, nr_claimed, tried, failed);
+	while (nr_claimed > limit) {
+		unsigned int m = 0;
+
+		for (i = 1; i < nr_claimed; i++)
+			if (claimed[i].hi - claimed[i].lo < claimed[m].hi - claimed[m].lo)
+				m = i;
+		release(claimed[m].lo >> PAGE_SHIFT, (claimed[m].hi - claimed[m].lo) >> PAGE_SHIFT);
+		got -= claimed[m].hi - claimed[m].lo;
+		memmove(&claimed[m], &claimed[m + 1], (nr_claimed - m - 1) * sizeof(claimed[0]));
+		nr_claimed--;
+	}
+	kvfree(bm);
+	pr_info("quest_kexec: extra claim: %llu MiB in %u range(s) (step %u KiB, %u pass limit)\n", got >> 20, nr_claimed, claim_step_kb, claim_passes);
+	pr_info("quest_kexec: census (steps): movable %u unmovable %u reclaimable %u other(cma/...) %u, reserved/zone-edge skipped %u\n", census[0], census[1], census[2], census[3], skip_res);
+	pr_info("quest_kexec: tried/claimed: movable %u/%u unmovable %u/%u reclaimable %u/%u; refused: busy(pinned/in-use) %u nomem %u inval %u other %u\n",
+		tried[0], okc[0], tried[1], okc[1], tried[2], okc[2], e_busy, e_nomem, e_inval, e_other);
 	for (i = 0; i < nr_claimed; i++)
 		pr_info("quest_kexec:   extra [%llx,%llx)\n", claimed[i].lo, claimed[i].hi);
 	return got >= (u64)256 << 20 ? 0 : -ENOMEM;

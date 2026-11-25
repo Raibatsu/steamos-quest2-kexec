@@ -7,10 +7,10 @@
 # drop_caches + compact_memory. claim_step_kb=4096 + claim_relax=1 gave the most RAM (~3.7 GB of 6 GB).
 cd /data/local/tmp
 MB=${1:-4608}; SUF=${3:-fan}
-COMMON="image=/data/local/tmp/Image-linux72 initrd=/data/local/tmp/initramfs-probe.cpio.gz stage2_verified=1 claim_mb=$MB claim_step_kb=4096 claim_relax=1"
+COMMON="image=/data/local/tmp/Image-linux72 initrd=/data/local/tmp/initramfs-probe.cpio.gz stage2_verified=1 claim_mb=$MB claim_step_kb=${STEP:-4096} claim_passes=${PASSES:-1} claim_relax=1"
 if [ "$2" = dry ]; then
   insmod ./quest_kexec.ko $COMMON dtb=/data/local/tmp/boot-130-$SUF.dtb payload_base=0x130000000 2>&1
-  dmesg | grep quest_kexec | tail -40
+  dmesg | grep -E "quest_kexec: (claim pass|extra claim|census|tried/)" | tail -12
   lsmod | grep -q quest_kexec && rmmod quest_kexec && echo released
   exit 0
 fi
