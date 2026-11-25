@@ -34,8 +34,11 @@ case "$1" in
     set_ "Headphone Volume" $v,$v ;;
   capture)
     set_ "MultiMedia2 Mixer PRI_MI2S_TX" 1
+    # Meta's mixer_paths.xml: default-mic + handset-mic-aec-ns
     set_ "Mic Switch" 1,1
-    set_ "Mic DSP Bypass" 1; set_ "Mic DSP Enable" 0 ;;
+    set_ "Mic DSP Enable" 1; set_ "Mic DSP Bypass" 0
+    set_ "Mic DSP AEC" 1; set_ "MIC DSP MaxNR for AEC" 0; set_ "MIC DSP TBrrLow" 6
+    set_ "MIC DSP MaxNR for BeamForming" 10362; set_ "MIC DSP BeamForming Beam width mode" 2 ;;
   status)
     amixer -c $C contents 2>/dev/null | grep -A2 -E "name='(Speaker|Headphone|OUTPUT MIX|Playback From|Mic Switch|Mic DSP|PRI_MI2S_RX Audio Mixer MultiMedia1|MultiMedia2 Mixer PRI_MI2S_TX|AK4331 (HP|PLL|BICK|MCKI|Digital Output))" | grep -v "^--" | paste - - - | sed 's/numid=[0-9]*,iface=[A-Z]*,//' | cut -c1-150 ;;
   *) sed -n 2,10p "$0"; exit 1 ;;
