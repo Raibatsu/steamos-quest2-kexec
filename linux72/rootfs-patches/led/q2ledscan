@@ -3,12 +3,12 @@
 # Run as root with q2-headtrack and q2-camd running, both controllers connected, held steady ~40 cm in front of the headset's front cameras.
 #   q2ledscan [--period 16664] [--ontime 100] [--step 500] [--settle 1.0] [--secs 1.5] [--thr 60]
 # For every offset 0..period-1 (step us) it sets both controllers' register 0x28 to {period, ontime, offset} (via q2ledctl), waits, then counts the pixels brighter than
-# --thr in the newest frames of all four cameras in /dev/shm/q2cam.  A baseline with the LED on-time at its minimum (1 us) is subtracted.  It prints the table and leaves the
+# --thr in the newest frames of all four cameras in /dev/shm/q2cam.  At every offset it measures LED off (on-time 1 us) then on, back to back, and scores on minus off (about 13 s for the default 10 offsets).  It prints the table and leaves the
 # best offset applied (NOT saved: use `q2ledctl save P O F` once you are happy).  The controllers' own schedule was period 39996, on-time 34, offset 29830.
 import mmap, os, struct, subprocess, sys, time
 A = dict(zip(sys.argv[1::2], sys.argv[2::2]))
-PERIOD = int(A.get('--period', 16664)); ONTIME = int(A.get('--ontime', 100)); STEP = int(A.get('--step', 500))
-SETTLE = float(A.get('--settle', 1.0)); SECS = float(A.get('--secs', 1.5)); THR = int(A.get('--thr', 60))
+PERIOD = int(A.get('--period', 16664)); ONTIME = int(A.get('--ontime', 100)); STEP = int(A.get('--step', 1666))
+SETTLE = float(A.get('--settle', 0.25)); SECS = float(A.get('--secs', 0.4)); THR = int(A.get('--thr', 60))
 if not (1000 <= PERIOD <= 200000 and 1 <= ONTIME <= 2000 and STEP >= 20): sys.exit('bad parameters')
 f = open('/dev/shm/q2cam', 'rb'); m = mmap.mmap(f.fileno(), 0, prot=mmap.PROT_READ)
 magic, ver, ncam, W, H, NS, HS, ST = struct.unpack_from('<8I', m, 0)
@@ -16,7 +16,7 @@ assert magic == 0x4d433251, 'q2camd is not publishing (is q2-camd running?)'
 LUT = bytes(1 if v >= THR else 0 for v in range(256))
 def led(p, o, off):
     subprocess.run(['/usr/bin/q2ledctl', 'set', 'both', str(p), str(o), str(off)], stdout=subprocess.DEVNULL, check=True)
-BASE = [0.0]
+HITPX = int(A.get('--hit', 60)); FROM = int(A.get('--from', 0))
 def measure(secs):
     """returns (bright pixels summed over frames, frames, frames with >= 2 bright px) across all cameras"""
     last = [struct.unpack_from('<Q', m, 0x40 + c * 64)[0] for c in range(4)]
@@ -30,19 +30,16 @@ def measure(secs):
                 s1, = struct.unpack_from('<Q', m, off)
                 if s1 & 1: continue                                  # being written
                 cnt = m[off + 64: off + 64 + W * H].translate(LUT).count(b'\x01')
-                tot += cnt; fr += 1; hit += cnt >= BASE[0] + 4          # a hit = clearly more bright pixels than the LED-off baseline
+                tot += cnt; fr += 1; hit += cnt >= HITPX                     # a hit = frame with at least HITPX bright pixels
         time.sleep(0.004)
     return tot, fr, hit
-print('baseline (LED on-time 1 us)...', flush=True)
-led(PERIOD, 1, 0); time.sleep(SETTLE + 0.5)
-b_tot, b_fr, b_hit = measure(SECS); base = b_tot / max(1, b_fr); BASE[0] = base
-print('baseline: %.2f bright px/frame over %d frames' % (base, b_fr), flush=True)
 rows = []
-for off in range(0, PERIOD, STEP):
-    led(PERIOD, ONTIME, off); time.sleep(SETTLE)
-    tot, fr, hit = measure(SECS); score = tot / max(1, fr) - base
-    rows.append((score, off, hit / max(1, fr), fr)); print('offset %6d us: %+8.2f bright px/frame over baseline, %3.0f%% of frames have LED pixels (%d frames)' % (off, score, 100.0 * hit / max(1, fr), fr), flush=True)
+for off in range(FROM, PERIOD, STEP):
+    led(PERIOD, 1, off); time.sleep(SETTLE); t0, f0, _ = measure(SECS)          # LED effectively off at this offset
+    led(PERIOD, ONTIME, off); time.sleep(SETTLE); t1, f1, h1 = measure(SECS)       # LED on
+    a0, a1 = t0 / max(1, f0), t1 / max(1, f1); score = a1 - a0                    # on minus off, back to back: static IR sources cancel
+    rows.append((score, off, 1.0 if score > 4 else 0.0, f1)); print('offset %6d us: off %7.2f on %7.2f px/frame -> %+8.2f, %3.0f%% of frames show the LEDs' % (off, a0, a1, score, 100.0 * h1 / max(1, f1)), flush=True)
 rows.sort(reverse=True)
-print('\nbest offsets:'); [print('  %6d us  score %+.2f  frames with LED %.0f%%' % (o, s, 100 * h)) for s, o, h, _ in rows[:5]]
+print('\nbest offsets:'); [print('  %6d us  score %+.2f  LED seen: %s' % (o, s, 'yes' if h else 'no')) for s, o, h, _ in rows[:5]]
 best = rows[0][1]; led(PERIOD, ONTIME, best)
 print('\nleft applied (not saved): period %d on-time %d offset %d.  Save with:  q2ledctl save %d %d %d' % (PERIOD, ONTIME, best, PERIOD, ONTIME, best))

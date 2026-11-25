@@ -8,6 +8,9 @@
  * - Supplies kexec bootargs (panic=5 for automatic pstore-preserving warm reboot).
  */
 
+#include <dt-bindings/sound/qcom,q6afe.h>
+#include <dt-bindings/sound/qcom,q6asm.h>
+#include <dt-bindings/sound/qcom,q6dsp-lpass-ports.h>
 #include <dt-bindings/pinctrl/qcom,pmic-gpio.h>
 #include "sm8250-oculus-hollywood.dts"
 
@@ -400,5 +403,251 @@
 		reg = <0x3 SPMI_USID>;
 		#address-cells = <1>;
 		#size-cells = <0>;
+	};
+};
+
+/*
+ * Audio (2026-11-25). Path, from Quest OS's own tree: ADSP (APR) -> primary MI2S (gpio138 SCK, 139 SD0, 140 SD1, 141 WS, 136 MCLK) -> the C-Media
+ * CM710x DSP codec (I2C 0x2c on QUP1 SE0, firmware over SPI on QUP0 SE2) together with the AKM AK4331 headphone DAC (I2C 0x10), both on one dai link;
+ * the speaker amplifier (MAX98502) is only an enable pin (gpio145) that the CM710x driver toggles. The ADSP's primary MI2S has RX on SD1, TX on SD0
+ * (Quest OS: qcom,msm-mi2s-rx-lines = 2, tx-lines = 1), 48 kHz S16, the DSP is the clock master.
+ * Which board revision this is (cm710x_p1_1_* in Quest OS's DT) decides the pins: LDO enable gpio147, reset gpio148, package select gpio144.
+ */
+&gpi_dma1 {
+	status = "okay";
+};
+
+&qupv3_id_1 {
+	status = "okay";
+};
+
+&tlmm {
+	pri_mi2s_default: pri-mi2s-default-state {
+		sck-pins {
+			pins = "gpio138";
+			function = "mi2s0_sck";
+			drive-strength = <8>;
+			bias-disable;
+		};
+
+		sd0-pins {
+			pins = "gpio139";
+			function = "mi2s0_data0";
+			drive-strength = <8>;
+			bias-disable;
+		};
+
+		sd1-pins {
+			pins = "gpio140";
+			function = "mi2s0_data1";
+			drive-strength = <8>;
+			bias-disable;
+		};
+
+		ws-pins {
+			pins = "gpio141";
+			function = "mi2s0_ws";
+			drive-strength = <8>;
+			bias-disable;
+		};
+
+		mclk-pins {
+			pins = "gpio136";
+			function = "pri_mi2s";
+			drive-strength = <2>;
+			bias-disable;
+		};
+	};
+
+	cm710x_default: cm710x-default-state {
+		ldo-pins {
+			pins = "gpio147";
+			function = "gpio";
+			drive-strength = <16>;
+			bias-pull-up;
+			output-high;
+		};
+
+		reset-pins {
+			pins = "gpio148";
+			function = "gpio";
+			drive-strength = <16>;
+			bias-pull-up;
+			output-high;
+		};
+
+		sel-pins {
+			pins = "gpio144";
+			function = "gpio";
+			drive-strength = <2>;
+			bias-pull-down;
+			output-low;
+		};
+	};
+
+	cm710x_suspend: cm710x-suspend-state {
+		reset-pins {
+			pins = "gpio148";
+			function = "gpio";
+			drive-strength = <2>;
+			bias-pull-down;
+			output-low;
+		};
+	};
+
+	cm710x_spk_on: cm710x-spk-on-state {
+		pins = "gpio145";
+		function = "gpio";
+		drive-strength = <16>;
+		bias-pull-up;
+		output-high;
+	};
+
+	cm710x_spk_off: cm710x-spk-off-state {
+		pins = "gpio145";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-down;
+		output-low;
+	};
+
+	ak4331_default: ak4331-default-state {
+		pdn-pins {
+			pins = "gpio146";
+			function = "gpio";
+			drive-strength = <16>;
+			bias-disable;
+			output-low;
+		};
+
+		intr-pins {
+			pins = "gpio121";
+			function = "gpio";
+			drive-strength = <2>;
+			bias-pull-up;
+			input-enable;
+		};
+	};
+};
+
+&i2c8 {
+	status = "okay";
+	clock-frequency = <400000>;
+
+	ak4331: audio-codec@10 {
+		compatible = "akm,ak4331";
+		reg = <0x10>;
+		#sound-dai-cells = <0>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&ak4331_default>;
+		ak4331,pdn-gpio = <&tlmm 146 GPIO_ACTIVE_HIGH>;
+		ak4331,headset-det-gpio = <&tlmm 121 GPIO_ACTIVE_HIGH>;
+	};
+
+	cm710x: audio-codec@2c {
+		compatible = "C-Media,cm710x";
+		reg = <0x2c>;
+		#sound-dai-cells = <0>;
+		cm710x,fw-parsing = "spi";
+		clocks = <&q6afecc LPASS_CLK_ID_INT_MCLK_0 LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+			 <&q6afecc LPASS_HW_DCODEC_VOTE LPASS_CLK_ATTRIBUTE_COUPLE_NO>;
+		clock-names = "cm7104_mclk", "lpass_audio_hw_vote";
+		assigned-clocks = <&q6afecc LPASS_CLK_ID_INT_MCLK_0 LPASS_CLK_ATTRIBUTE_COUPLE_NO>;
+		assigned-clock-rates = <19200000>;
+		pinctrl-names = "cm710x_codec_default", "cm710x_codec_suspend", "cm710x_codec_spk_en", "cm710x_codec_spk_suspend";
+		pinctrl-0 = <&cm710x_default>;
+		pinctrl-1 = <&cm710x_suspend>;
+		pinctrl-2 = <&cm710x_spk_on>;
+		pinctrl-3 = <&cm710x_spk_off>;
+	};
+};
+
+&spi2 {
+	status = "okay";
+
+	cm710x-spi@0 {
+		compatible = "C-Media,cm710x-spi";
+		reg = <0>;
+		spi-cpha;
+		spi-cpol;
+		spi-max-frequency = <20000000>;
+	};
+};
+
+&q6afedai {
+	dai@16 {
+		reg = <PRIMARY_MI2S_RX>;
+		qcom,sd-lines = <1>;
+	};
+
+	dai@17 {
+		reg = <PRIMARY_MI2S_TX>;
+		qcom,sd-lines = <0>;
+	};
+};
+
+&q6asmdai {
+	dai@0 {
+		reg = <MSM_FRONTEND_DAI_MULTIMEDIA1>;
+	};
+
+	dai@1 {
+		reg = <MSM_FRONTEND_DAI_MULTIMEDIA2>;
+	};
+};
+
+&sound {
+	compatible = "qcom,sm8250-sndcard";
+	model = "Quest2";
+	pinctrl-names = "default";
+	pinctrl-0 = <&pri_mi2s_default>;
+	status = "okay";
+
+	mm1-dai-link {
+		link-name = "MultiMedia1";
+
+		cpu {
+			sound-dai = <&q6asmdai MSM_FRONTEND_DAI_MULTIMEDIA1>;
+		};
+	};
+
+	mm2-dai-link {
+		link-name = "MultiMedia2";
+
+		cpu {
+			sound-dai = <&q6asmdai MSM_FRONTEND_DAI_MULTIMEDIA2>;
+		};
+	};
+
+	primary-dai-link {
+		link-name = "Primary MI2S";
+
+		cpu {
+			sound-dai = <&q6afedai PRIMARY_MI2S_RX>;
+		};
+
+		platform {
+			sound-dai = <&q6routing>;
+		};
+
+		codec {
+			sound-dai = <&cm710x>, <&ak4331>;
+		};
+	};
+
+	primary-capture-dai-link {
+		link-name = "Primary MI2S Capture";
+
+		cpu {
+			sound-dai = <&q6afedai PRIMARY_MI2S_TX>;
+		};
+
+		platform {
+			sound-dai = <&q6routing>;
+		};
+
+		codec {
+			sound-dai = <&cm710x>;
+		};
 	};
 };
