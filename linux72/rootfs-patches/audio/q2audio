@@ -1,0 +1,42 @@
+#!/bin/sh
+# q2audio - bring up Quest 2 audio on Linux (ADSP -> primary MI2S -> CM710x + AK4331) with the mixer settings Quest OS itself uses (strace/tinymix of Horizon, 2026-11-25).
+#   q2audio start              start the ADSP (its firmware is requested before the root filesystem exists, so it must be started after boot) and wait for the card
+#   q2audio speaker [vol]      route playback to the speakers  (Horizon: Speaker Switch / OUTPUT MIX SPK Switch; vol = CM710x "Speaker Volume", default 40, Horizon uses 87)
+#   q2audio headphones [vol]   route playback to the 3.5 mm jack (Horizon: Headphone Switch, OUTPUT MIX HP Switch, AK4331 HPL/HPR DAC mixers; default 40, Horizon 85)
+#   q2audio capture            route the microphone: PRI_MI2S_TX -> MultiMedia2 capture, then `arecord -D hw:0,1 -f S16_LE -r 48000 -c 2 -d 3 /tmp/mic.wav`
+#   q2audio status             show the key controls
+# Volumes are on the codec's own scale: start LOW (a -24 dBFS tone at 87 was "loud as hell" on the speakers). Playback: `aplay -D hw:0,0 file.wav` (48 kHz S16 stereo).
+C=0
+set_() { amixer -q -c $C cset name="$1" "$2" 2>/dev/null || echo "q2audio: control '$1' not found" >&2; }
+case "$1" in
+  start)
+    echo start > /sys/class/remoteproc/remoteproc1/state 2>/dev/null
+    i=0; while [ $i -lt 40 ]; do grep -q Quest2 /proc/asound/cards 2>/dev/null && { echo "card Quest2 is up"; exit 0; }; sleep 1; i=$((i+1)); done
+    echo "q2audio: the Quest2 card did not appear (is /lib/firmware/qcom/sm8250/hollywood/adsp.mdt there?)" >&2; exit 1 ;;
+  speaker)
+    v=${2:-40}
+    set_ "PRI_MI2S_RX Audio Mixer MultiMedia1" 1
+    set_ "Playback From Mux" AIF1
+    set_ "OUTPUT MIX HP Switch" 0; set_ "Headphone Switch" 0,0
+    set_ "OUTPUT MIX SPK Switch" 1; set_ "Speaker Switch" 1,1
+    set_ "Speaker Volume" $v,$v ;;
+  headphones)
+    v=${2:-40}
+    set_ "PRI_MI2S_RX Audio Mixer MultiMedia1" 1
+    set_ "Playback From Mux" AIF1
+    set_ "OUTPUT MIX SPK Switch" 0; set_ "Speaker Switch" 0,0
+    # AK4331: clocking as Horizon leaves it (PLL from BICK, BICK 64fs, MCKI 9.6 MHz, SRC bypass, 48 kHz)
+    set_ "AK4331 PLL Mode" PLL_BICK_MODE; set_ "AK4331 BICK Frequency Select" 64fs; set_ "AK4331 BICK Output Frequency" 64fs
+    set_ "AK4331 MCKI/XTI Frequency" 9.6MHz; set_ "AK4331 SRC Mode" Bypass; set_ "AK4331 SRC Output FS" 48kHz
+    set_ "AK4331 HPL Mixer LDACL" 1; set_ "AK4331 HPR Mixer RDACR" 1
+    set_ "AK4331 Digital Output VolumeL" 25; set_ "AK4331 Digital Output VolumeR" 25; set_ "AK4331 HP-Amp Analog Volume" 3
+    set_ "OUTPUT MIX HP Switch" 1; set_ "Headphone Switch" 1,1
+    set_ "Headphone Volume" $v,$v ;;
+  capture)
+    set_ "MultiMedia2 Mixer PRI_MI2S_TX" 1
+    set_ "Mic Switch" 1,1
+    set_ "Mic DSP Bypass" 1; set_ "Mic DSP Enable" 0 ;;
+  status)
+    amixer -c $C contents 2>/dev/null | grep -A2 -E "name='(Speaker|Headphone|OUTPUT MIX|Playback From|Mic Switch|Mic DSP|PRI_MI2S_RX Audio Mixer MultiMedia1|MultiMedia2 Mixer PRI_MI2S_TX|AK4331 (HP|PLL|BICK|MCKI|Digital Output))" | grep -v "^--" | paste - - - | sed 's/numid=[0-9]*,iface=[A-Z]*,//' | cut -c1-150 ;;
+  *) sed -n 2,10p "$0"; exit 1 ;;
+esac
