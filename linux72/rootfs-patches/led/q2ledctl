@@ -1,0 +1,50 @@
+#!/usr/bin/python3
+# q2ledctl - Touch-controller IR-LED sync (controller register 0x28 = {period_us, on_time_us, offset_us}), through q2-headtrack. Run as root.
+#   q2ledctl get                                  read both controllers' current setting (printed from /dev/syncboss_control0)
+#   q2ledctl set <left|right|both> P O F          set now (not saved): period P us, LED on-time O us, offset F us
+#   q2ledctl save P O F                           save to /var/lib/q2/ledsync: re-applied whenever a controller connects or wakes
+#   q2ledctl off                                  forget the saved setting (controllers keep the last value until they sleep; use `set both 39996 34 29830` for their own default)
+#   q2ledctl status                               show the saved setting
+# Bounds (also enforced by the tracker): 1000 <= P <= 200000, 1 <= O <= 2000, |F| < P.  The controllers' own values were period 39996, on-time 34, offset 29830.
+import os, select, struct, sys, time
+LEDF = '/var/lib/q2/ledsync'; TRIG = '/dev/shm/q2ht-led'
+def ok(p, o, f): return 1000 <= p <= 200000 and 1 <= o <= 2000 and abs(f) < p
+def trigger(lines):
+    if not os.path.exists('/run/q2headtrack.pid'): sys.exit('q2-headtrack is not running')
+    open(TRIG + '.tmp', 'w').write('\n'.join(lines) + '\n'); os.rename(TRIG + '.tmp', TRIG)
+    for _ in range(60):
+        if not os.path.exists(TRIG): return
+        time.sleep(0.1)
+    print('(the tracker has not picked the request up yet)')
+def nums(a):
+    try: p, o, f = int(a[0]), int(a[1]), int(a[2])
+    except Exception: sys.exit(__doc__)
+    if not ok(p, o, f): sys.exit('values out of range (1000 <= P <= 200000, 1 <= O <= 2000, |F| < P)')
+    return p, o, f
+a = sys.argv[1:]
+if not a: sys.exit(__doc__)
+if a[0] == 'get':
+    fd = os.open('/dev/syncboss_control0', os.O_RDONLY | os.O_NONBLOCK); buf = b''
+    trigger(['get both']); end = time.time() + 3.0; seen = 0
+    while time.time() < end and seen < 2:
+        r, _, _ = select.select([fd], [], [], 0.1)
+        if not r: continue
+        try: buf += os.read(fd, 65536)
+        except BlockingIOError: continue
+        while len(buf) >= 3 and len(buf) >= 3 + buf[2]:
+            ty, l = buf[0], buf[2]; d = buf[3:3 + l]; buf = buf[3 + l:]
+            if ty == 0x8f and len(d) >= 32 and d[19] == 0x28:
+                cid = struct.unpack_from('<Q', d, 0)[0]; p, o, f = struct.unpack_from('<IIi', d, 20); seen += 1
+                print('controller %016x: period %d us, on-time %d us, offset %d us' % (cid, p, o, f))
+    if not seen: print('no answer (controllers asleep or not connected? press a button on each)')
+elif a[0] == 'set' and len(a) == 5 and a[1] in ('left', 'right', 'both'):
+    p, o, f = nums(a[2:]); trigger(['set %s %d %d %d' % (a[1], p, o, f)]); print('sent: %s controller(s): %d %d %d' % (a[1], p, o, f))
+elif a[0] == 'save' and len(a) == 4:
+    p, o, f = nums(a[1:]); os.makedirs('/var/lib/q2', exist_ok=True); open(LEDF, 'w').write('%d %d %d\n' % (p, o, f))
+    print('saved %d %d %d; applied when a controller (re)connects (within ~5 s); apply now with: q2ledctl set both %d %d %d' % (p, o, f, p, o, f))
+elif a[0] == 'off':
+    try: os.unlink(LEDF); print('saved setting removed')
+    except FileNotFoundError: print('nothing saved')
+elif a[0] == 'status':
+    print(open(LEDF).read().strip() if os.path.exists(LEDF) else '(no saved setting: controllers use their own schedule)')
+else: sys.exit(__doc__)

@@ -386,6 +386,13 @@
 				label = "vbat_sns";
 			};
 		};
+
+		charger@1000 {
+			compatible = "oculus,quest2-charger";
+			reg = <0x1000>;
+			io-channels = <&pm8150b_adc ADC5_USB_IN_V_16>, <&pm8150b_adc ADC5_USB_IN_I>, <&pm8150b_adc ADC5_VBAT_SNS>;
+			io-channel-names = "usbin_v", "usbin_i", "vbat";
+		};
 	};
 
 	pmic@3 {

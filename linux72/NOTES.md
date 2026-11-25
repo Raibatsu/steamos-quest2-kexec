@@ -357,3 +357,7 @@ register read = GET_DATA register 0x8f with the same 20-byte header (reg at offs
 **Scripts:** `tools/kexec_l2l.sh` does the whole Linux->Linux kexec + NBD re-attach + service wait (about 3 minutes); gotcha fixed: its web server must be started with `exec` and any stale listener on port 8000 killed,
 otherwise a leaked server serving a deleted directory makes the headset download nothing and the load check fails (harmlessly: the kernel is not replaced).
 
+
+## Charger driver and LED tools (2026-11-25) - status
+- `linux72/drivers/quest2_charger.c` (+ DT node `charger@1000` in dts/sm8250-oculus-hollywood-kexec.dts, Kconfig `CHARGER_QUEST2`): reports USB input V/I, ICL, charge state, float voltage, enables CHARGING_ENABLE_CMD only when temperature/limits are within the battery profile, `charge_behaviour` inhibit, `voltage_max` 4.0-4.4 V. It compiles; **it has not run on hardware**: the Linux->Linux kexec into the kernel that contains it did not bring Stage 1 up (no USB network afterwards, cause unknown: no kmsg captured). Next: power-cycle, Singularity, boot the known-good Image first, then try this one (consider building it as a module to isolate a hang).
+- LED sync: `rootfs-patches/led/{patch_led.py,q2ledctl,q2ledscan}`; register 0x28 read/write verified on hardware; the offset scan has not been run (needs controllers held in view).
