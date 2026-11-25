@@ -19,6 +19,7 @@ cap() { name=$1; shift; { "$@"; } > "$OUT/$name" 2>&1; }       # cap <file> <com
 capsh() { name=$1; shift; sh -c "$*" > "$OUT/$name" 2>&1; }      # capsh <file> '<shell string>'
 DBG=/sys/kernel/debug
 [ -d $DBG/tracing ] || mount -t debugfs none $DBG 2>/dev/null
+TR=$DBG/tracing; [ -d $TR ] || TR=/sys/kernel/tracing   # Horizon has tracefs but no debugfs
 
 snapshot() {
   cap uname uname -a
@@ -93,20 +94,20 @@ ctl() {
   SP=''
   for pid in $pids; do
     if have strace; then strace -f -tt -s 96 -xx -e trace=openat,ioctl,read,write,pread64,pwrite64,sendmsg,recvmsg -p $pid -o "$OUT/strace_$pid" 2>/dev/null & SP="$SP $!"
-    elif [ -d $DBG/tracing ]; then
-      echo $pid >> $DBG/tracing/set_event_pid 2>/dev/null
-      for e in sys_enter_ioctl sys_enter_write sys_enter_read sys_enter_openat; do echo 1 > $DBG/tracing/events/syscalls/$e/enable 2>/dev/null; done
-      echo 1 > $DBG/tracing/tracing_on 2>/dev/null
+    elif [ -d $TR ]; then
+      echo $pid >> $TR/set_event_pid 2>/dev/null
+      for e in sys_enter_ioctl sys_enter_write sys_enter_read sys_enter_openat; do echo 1 > $TR/events/syscalls/$e/enable 2>/dev/null; done
+      echo 1 > $TR/tracing_on 2>/dev/null
     fi
   done
   sleep "$secs"
   [ -n "$SP" ] && kill $SP 2>/dev/null
   [ -n "$LC" ] && kill $LC 2>/dev/null
-  if [ -d $DBG/tracing ] && ! have strace; then
-    cat $DBG/tracing/trace > "$OUT/ftrace_syscalls" 2>/dev/null
-    echo 0 > $DBG/tracing/tracing_on 2>/dev/null
-    for e in sys_enter_ioctl sys_enter_write sys_enter_read sys_enter_openat; do echo 0 > $DBG/tracing/events/syscalls/$e/enable 2>/dev/null; done
-    : > $DBG/tracing/set_event_pid 2>/dev/null; : > $DBG/tracing/trace 2>/dev/null
+  if [ -d $TR ] && ! have strace; then
+    cat $TR/trace > "$OUT/ftrace_syscalls" 2>/dev/null
+    echo 0 > $TR/tracing_on 2>/dev/null
+    for e in sys_enter_ioctl sys_enter_write sys_enter_read sys_enter_openat; do echo 0 > $TR/events/syscalls/$e/enable 2>/dev/null; done
+    : > $TR/set_event_pid 2>/dev/null; : > $TR/trace 2>/dev/null
   fi
   cap dmesg_after dmesg
   diff "$OUT/dmesg_before" "$OUT/dmesg_after" 2>/dev/null | grep '^>' | sed 's/^> //' > "$OUT/dmesg_new"

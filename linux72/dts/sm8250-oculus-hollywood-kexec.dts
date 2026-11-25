@@ -549,10 +549,10 @@
 		reg = <0x2c>;
 		#sound-dai-cells = <0>;
 		cm710x,fw-parsing = "spi";
-		clocks = <&q6afecc LPASS_CLK_ID_INT_MCLK_0 LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+		clocks = <&q6afecc LPASS_CLK_ID_MCLK_1 LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
 			 <&q6afecc LPASS_HW_DCODEC_VOTE LPASS_CLK_ATTRIBUTE_COUPLE_NO>;
 		clock-names = "cm7104_mclk", "lpass_audio_hw_vote";
-		assigned-clocks = <&q6afecc LPASS_CLK_ID_INT_MCLK_0 LPASS_CLK_ATTRIBUTE_COUPLE_NO>;
+		assigned-clocks = <&q6afecc LPASS_CLK_ID_MCLK_1 LPASS_CLK_ATTRIBUTE_COUPLE_NO>;
 		assigned-clock-rates = <19200000>;
 		pinctrl-names = "cm710x_codec_default", "cm710x_codec_suspend", "cm710x_codec_spk_en", "cm710x_codec_spk_suspend";
 		pinctrl-0 = <&cm710x_default>;
@@ -572,6 +572,10 @@
 		spi-cpol;
 		spi-max-frequency = <20000000>;
 	};
+};
+
+&q6afe {
+	qcom,instance-id-support;	/* Quest OS: mixer "Instance ID Support" = On; its firmware refuses the old clock-set command */
 };
 
 &q6afedai {
