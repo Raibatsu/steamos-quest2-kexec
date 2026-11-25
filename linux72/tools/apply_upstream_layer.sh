@@ -21,3 +21,6 @@ sed -i 's/"pico4,compatible"/"quest2,compatible"/; s/"pico4,model"/"quest2,model
 F=$L/drivers/gpu/drm/drm_fb_helper.c
 sed -i 's/^	drm_fb_helper_restore_fbdev_mode_unlocked(dev->fb_helper);$/	drm_fb_helper_restore_fbdev_mode_unlocked(dev->fb_helper, false);/' $F
 echo layer applied
+# our fixes on top of the upstream layer: camera sensors 1 and 3 had their clock pin-mux states swapped (sensor 3 could not power up)
+if [ -f "$(dirname "$0")/../patches/camera-sensor-pinctrl.patch" ]; then (cd $L && patch -p1 --forward < "$(dirname "$0")/../patches/camera-sensor-pinctrl.patch" >/dev/null && echo "camera pinctrl fix applied"); fi
+

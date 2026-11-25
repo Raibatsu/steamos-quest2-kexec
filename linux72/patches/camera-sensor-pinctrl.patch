@@ -1,0 +1,24 @@
+--- a/arch/arm64/boot/dts/qcom/sm8250-oculus-hollywood.dts	2026-11-25 05:31:36.216741378 +0500
++++ b/arch/arm64/boot/dts/qcom/sm8250-oculus-hollywood.dts	2026-11-25 05:31:36.217669788 +0500
+@@ -717,8 +717,8 @@
+ 				rgltr-load-current = <0x1d4c0 0x13880 0x0>;
+ 				gpio-no-mux = <0x0>;
+ 				pinctrl-names = "cam_default", "cam_suspend";
+-				pinctrl-0 = <&q2pin_326>;
+-				pinctrl-1 = <&q2pin_327>;
++				pinctrl-0 = <&q2pin_322>;
++				pinctrl-1 = <&q2pin_323>;
+ 				gpios = <&tlmm 95 0>;
+ 				gpio-req-tbl-num = <0x0>;
+ 				gpio-req-tbl-flags = <0x1>;
+@@ -863,8 +863,8 @@
+ 				rgltr-load-current = <0x1d4c0 0x13880 0x0>;
+ 				gpio-no-mux = <0x0>;
+ 				pinctrl-names = "cam_default", "cam_suspend";
+-				pinctrl-0 = <&q2pin_322>;
+-				pinctrl-1 = <&q2pin_323>;
++				pinctrl-0 = <&q2pin_326>;
++				pinctrl-1 = <&q2pin_327>;
+ 				gpios = <&tlmm 97 0>;
+ 				gpio-req-tbl-num = <0x0>;
+ 				gpio-req-tbl-flags = <0x1>;

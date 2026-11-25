@@ -266,7 +266,10 @@ The old `0x28` probe and `0xdd` set_metadata_mode steps are not needed. `tools/q
 `rootfs-patches/camera/patch_wl.py` adds `0x2e`/`0x2f` to q2headtrack's camera-command whitelist (it already forwarded 0x2a/0x2c/0x2d/0x28 and 0x03..0xdd).
 Verified through the live tracker: 2643 images in 15 s, controllers kept streaming. The earlier notes below (command rejections) describe the old, incomplete sequence.
 
-Still open: **slot 3** (gpio95 is held as a plain GPIO, so its MCLK never starts), and turning frames into tracking (`q2blobs`/`q2ctltrack`, or Meta's tracker).
+**Slot 3 fixed (2026-11-25):** `sm8250-oculus-hollywood.dts` had the clock pin-mux states of sensors 1 and 3 swapped (sensor1 pinctrl gpio97 + gpio request 95; sensor3 pinctrl gpio95 + request 97), so
+sensor 3's gpio97 request collided with sensor 1's mux (`pin-97 EINVAL`). `patches/camera-sensor-pinctrl.patch` swaps them (apply_upstream_layer.sh applies it). All four sensors now stream ~59.8 fps (3512 images in 15 s, mask `0f000000`).
+
+Still open: turning frames into tracking (`q2blobs`/`q2ctltrack`, or Meta's tracker).
 
 ### Meta's stock userspace, extracted for building native replacements (2026-11-25)
 `tools/q2stockmount.py mount|umount` mounts the stock partitions of `super` (vendor_a, odm_a, product_a, system_ext_a, system_a, all ext4) **read-only** (dm --readonly, ro,noload,
