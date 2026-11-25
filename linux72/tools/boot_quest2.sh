@@ -15,7 +15,7 @@
 # never edit disk.img while nbd_server.py runs; always stage2_verified=1 shutdown_dsps=1 watchdog_recovery=1 preserve_watchdog=1 execute=1 (kxc.sh does).
 set -u
 B=${Q2_BOOT_DIR:-/mnt/HDD/quest2-boot}
-HOST=10.42.0.1; HEAD=10.42.0.2; CLAIM_MB=${CLAIM_MB:-4608}
+HOST=10.42.0.1; HEAD=10.42.0.2; CLAIM_MB=${CLAIM_MB:-5120}
 GO=0; [ "${1:-}" = "--go" ] && GO=1
 TN="python3 -I $B/host/tn.py"
 step() { printf '\n== %s\n' "$*"; }
@@ -77,7 +77,7 @@ sleep 2; ss -ltnu 2>/dev/null | grep -E "$HOST:(10809|6666)" | sed 's/  */ /g'
 
 step "7/8 THE JUMP: Horizon -> Linux 7.2 (kxc.sh tries each payload base until one jumps; the adb session dies)"
 # Q2_BASES="130 110" overrides the payload windows kxc.sh tries (default: 120 140, the windows known to boot; 130 hangs)
-timeout 150 adb shell "su -c 'BASES=\"${Q2_BASES:-120 140}\" sh /data/local/tmp/kxc.sh $CLAIM_MB'" > /tmp/q2_kxc.out 2>&1 &
+timeout 150 adb shell "su -c 'BASES=\"${Q2_BASES:-120 140}\" STEP=${Q2_STEP:-4096} PASSES=${Q2_PASSES:-3} STOPFW=${Q2_STOPFW:-2} HARVEST=${Q2_HARVEST:-6} sh /data/local/tmp/kxc.sh $CLAIM_MB'" > /tmp/q2_kxc.out 2>&1 &
 for i in $(seq 1 90); do ping -c1 -W1 $HEAD >/dev/null 2>&1 && { echo "Stage 1 answers on $HEAD after ~${i}s"; break; }; sleep 2; done
 ping -c1 -W2 $HEAD >/dev/null 2>&1 || { tail -5 /tmp/q2_kxc.out; if grep -q "failed: -16" /tmp/q2_kxc.out 2>/dev/null && ! grep -q "base .*: .*executing\|jump" /tmp/q2_kxc.out 2>/dev/null && adb devices | grep -q "device$" && adb shell "su -c id" 2>/dev/null | grep -q uid=0; then die "no known-good payload window (120, 140) could be claimed: Horizon memory is too busy. Nothing was jumped; reboot Horizon, run Singularity, and run this script again right away."; fi; die "Stage 1 did not come up. Headset probably still in Horizon or crashed: check /sys/fs/pstore after the next Singularity, see NOTES.md"; }
 sleep 8

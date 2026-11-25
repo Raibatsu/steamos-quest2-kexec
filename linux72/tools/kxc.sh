@@ -7,12 +7,23 @@
 # drop_caches + compact_memory. claim_step_kb=4096 + claim_relax=1 gave the most RAM (~3.7 GB of 6 GB).
 cd /data/local/tmp
 MB=${1:-4608}; SUF=${3:-fan}
-COMMON="image=/data/local/tmp/Image-linux72 initrd=/data/local/tmp/initramfs-probe.cpio.gz stage2_verified=1 claim_mb=$MB claim_step_kb=${STEP:-4096} claim_passes=${PASSES:-1} claim_relax=1"
+COMMON="image=/data/local/tmp/Image-linux72 initrd=/data/local/tmp/initramfs-probe.cpio.gz stage2_verified=1 claim_mb=$MB claim_step_kb=${STEP:-4096} claim_passes=${PASSES:-1} harvest_min_order=${HARVEST:-6} claim_relax=1"
 if [ "$2" = dry ]; then
   insmod ./quest_kexec.ko $COMMON dtb=/data/local/tmp/boot-130-$SUF.dtb payload_base=0x130000000 2>&1
   dmesg | grep -E "quest_kexec: (claim pass|extra claim|census|tried/)" | tail -12
   lsmod | grep -q quest_kexec && rmmod quest_kexec && echo released
   exit 0
+fi
+# STOPFW=2: stop only zygote (+secondary): the Java framework and all apps go (about 1+ GB of RAM), SurfaceFlinger and the composer keep the panel lit (verified 2026-11-26: DSI dpms
+# stays On, brightness 255). STOPFW=1: stop the whole framework including SurfaceFlinger: ~470 MiB more for Linux but the panel goes dark, and both jump attempts made that way reset
+# the headset (cold reset, nothing in pstore), so it is refused here. The panel state is checked from sysfs after stopping; if it is not On the jump is aborted and zygote restarted.
+if [ "${STOPFW:-0}" != 0 ] && [ "$2" != dry ]; then
+  if [ "$STOPFW" = 1 ]; then stop 2>/dev/null; else stop zygote 2>/dev/null; stop zygote_secondary 2>/dev/null; fi
+  sleep 6
+  if [ "$(cat /sys/class/drm/card0-DSI-1/dpms 2>/dev/null)" != On ]; then
+    echo "ABORT: the panel is not On after stopping the framework; not jumping"; start zygote 2>/dev/null; start zygote_secondary 2>/dev/null; exit 1
+  fi
+  for i in 1 2 3; do echo 3 > /proc/sys/vm/drop_caches; echo 1 > /proc/sys/vm/compact_memory; sleep 2; done
 fi
 # candidate payload windows (units of 0x1000000: 130 = 0x130000000). Which one is free varies per Horizon boot: the real run claims the 56 MiB window first and
 # fails with -16 if a page in it is pinned (or "unsupported pageblock type" if it is unmovable); 2026-11-25: 130, 110, 100, 140-180 failed, 120 worked.

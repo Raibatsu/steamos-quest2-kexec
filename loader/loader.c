@@ -69,6 +69,11 @@ static unsigned int claim_mb;
 static unsigned int claim_step_kb = 4096;
 static bool claim_relax;
 static unsigned int claim_passes = 1;
+static unsigned int harvest_min_order = 6;      /* 0 disables; free chunks of 2^order pages and up are taken straight from the buddy allocator */
+static unsigned int harvest_keep_mb = 96;      /* never harvest below this much free RAM: the payload staging and descriptors still need ~64 MiB */
+#define QKX_MAX_HARVEST 3000
+static struct { unsigned long pfn; unsigned int order; } harvested[QKX_MAX_HARVEST];
+static unsigned int nr_harvested;
 static unsigned int claim_retry_ms = 150;
 static unsigned long long claim_lo = 0x80000000ULL, claim_hi = 0x200000000ULL;
 static struct { u64 lo, hi; } claimed[QKX_MAX_EXTRA];
@@ -109,6 +114,10 @@ module_param(claim_mb, uint, 0);
 MODULE_PARM_DESC(claim_mb, "Extra movable RAM (MiB) to claim from Horizon and hand to Linux via the DTB memory node placeholder");
 module_param(claim_step_kb, uint, 0);
 MODULE_PARM_DESC(claim_step_kb, "Claim granularity in KiB (power of two, 512..4096); smaller recovers free chunks of refused pageblocks");
+module_param(harvest_min_order, uint, 0);
+MODULE_PARM_DESC(harvest_min_order, "After the pageblock claim, also take free chunks of 2^N pages and larger straight from the buddy allocator (0 = off, default 6 = 256 KiB)");
+module_param(harvest_keep_mb, uint, 0);
+MODULE_PARM_DESC(harvest_keep_mb, "Free RAM (MiB) left alone by the harvest");
 module_param(claim_passes, uint, 0);
 MODULE_PARM_DESC(claim_passes, "Retry passes over the whole RAM range (a refusal can be transient); stops early when a pass claims nothing new");
 module_param(claim_retry_ms, uint, 0);
@@ -655,24 +664,76 @@ static int qkx_claim_extra(void)
 			msleep(claim_retry_ms);
 	}
 
-	/* build the merged range list from the bitmap, then trim to what the DTB can hold (release the smallest first) */
-	nr_claimed = 0;
-	for (bit = 0; bit < nbits; bit++) {
-		u64 lo, hi;
+	/* harvest: free chunks that sit inside pageblocks the claim had to refuse (they hold a pinned page) come straight off the buddy free lists; every such page is
+	 * one Horizon itself may hand to userspace, so it is HLOS-accessible. GFP_NOWAIT: no reclaim, no sleeping, only what is free. */
+	if (harvest_min_order) {
+		void (*split)(struct page *, unsigned int) = (void *)lookup("split_page");
+		int o;
 
-		if (!test_bit(bit, bm))
-			continue;
-		lo = (u64)(base_pfn + bit * step) << PAGE_SHIFT;
-		hi = lo + ((u64)step << PAGE_SHIFT);
-		if (nr_claimed && claimed[nr_claimed - 1].hi == lo)
-			claimed[nr_claimed - 1].hi = hi;
-		else if (nr_claimed < QKX_MAX_EXTRA) {
-			claimed[nr_claimed].lo = lo;
-			claimed[nr_claimed].hi = hi;
-			nr_claimed++;
-		} else {
-			release(base_pfn + bit * step, step);
-			got -= (u64)step << PAGE_SHIFT;
+		for (o = 10; split && o >= (int)harvest_min_order && got < target; o--) {
+			while (got < target && nr_harvested < QKX_MAX_HARVEST) {
+				struct sysinfo si;
+				struct page *pg;
+
+				si_meminfo(&si);
+				if (((u64)si.freeram << PAGE_SHIFT) < ((u64)harvest_keep_mb << 20))
+					break;
+				pg = alloc_pages(GFP_NOWAIT | __GFP_NOWARN | __GFP_NORETRY, o);
+				if (!pg)
+					break;
+				split(pg, o);
+				harvested[nr_harvested].pfn = page_to_pfn(pg);
+				harvested[nr_harvested].order = o;
+				nr_harvested++;
+				got += (u64)PAGE_SIZE << o;
+			}
+		}
+		pr_info("quest_kexec: harvest: %u chunk(s), %llu MiB (orders %d..%u)\n", nr_harvested,
+			({ u64 t = 0; unsigned int k; for (k = 0; k < nr_harvested; k++) t += (u64)PAGE_SIZE << harvested[k].order; t >> 20; }), 10, harvest_min_order);
+	}
+
+	/* union of the claimed steps (bitmap) and the harvested chunks -> sorted, merged range list */
+	{
+		static struct { u64 lo, hi; } iv[QKX_MAX_EXTRA + QKX_MAX_HARVEST + 8];
+		unsigned int n = 0, k;
+
+		for (bit = 0; bit < nbits; bit++) {
+			u64 lo, hi;
+
+			if (!test_bit(bit, bm))
+				continue;
+			lo = (u64)(base_pfn + bit * step) << PAGE_SHIFT;
+			hi = lo + ((u64)step << PAGE_SHIFT);
+			if (n && iv[n - 1].hi == lo)
+				iv[n - 1].hi = hi;
+			else if (n < QKX_MAX_EXTRA + QKX_MAX_HARVEST)
+				iv[n].lo = lo, iv[n].hi = hi, n++;
+		}
+		for (k = 0; k < nr_harvested && n < QKX_MAX_EXTRA + QKX_MAX_HARVEST; k++) {
+			iv[n].lo = (u64)harvested[k].pfn << PAGE_SHIFT;
+			iv[n].hi = iv[n].lo + ((u64)PAGE_SIZE << harvested[k].order);
+			n++;
+		}
+		for (k = 1; k < n; k++) {		/* insertion sort by lo: n is a few hundred */
+			u64 lo = iv[k].lo, hi = iv[k].hi;
+			int j = k - 1;
+
+			while (j >= 0 && iv[j].lo > lo) { iv[j + 1] = iv[j]; j--; }
+			iv[j + 1].lo = lo; iv[j + 1].hi = hi;
+		}
+		nr_claimed = 0;
+		for (k = 0; k < n; k++) {
+			if (nr_claimed && claimed[nr_claimed - 1].hi >= iv[k].lo) {
+				if (iv[k].hi > claimed[nr_claimed - 1].hi)
+					claimed[nr_claimed - 1].hi = iv[k].hi;
+			} else if (nr_claimed < QKX_MAX_EXTRA) {
+				claimed[nr_claimed].lo = iv[k].lo;
+				claimed[nr_claimed].hi = iv[k].hi;
+				nr_claimed++;
+			} else {
+				release(iv[k].lo >> PAGE_SHIFT, (iv[k].hi - iv[k].lo) >> PAGE_SHIFT);
+				got -= iv[k].hi - iv[k].lo;
+			}
 		}
 	}
 	while (nr_claimed > limit) {
