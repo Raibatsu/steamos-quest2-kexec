@@ -43,6 +43,10 @@ echo "$OUT" | grep -q 'rc=0' || { echo "$OUT" | tail -12; die "load check failed
 echo "load check OK"
 
 echo "== 3/6 jump"
+# 2026-11-25: a slow btrfs-on-NBD sync (many dirty pages from the camera/tracker daemons) tripped the old kernel's hung-task panic (hung_task_panic=1) and rebooted the
+# headset before the jump ever happened. Quiet the writers, turn the panic off, and wait for the flush before executing.
+$TN $HEAD 2323 "echo 0 > /proc/sys/kernel/hung_task_panic; systemctl stop q2-camd q2-ctltrack q2-headtrack; (sync; echo > /run/synced) >/dev/null 2>&1 &" 5 >/dev/null
+for i in $(seq 1 90); do $TN $HEAD 2323 "test -e /run/synced && printf \"__SYN_%s__\\n\" OK" 5 2>/dev/null | grep -q __SYN_OK__ && break; sleep 2; done
 $TN $HEAD 2323 "sync; cd /run/kx; (nohup ./q2kexec -B $BASE -D kx.dtb Image initrd.gz > /run/kx.log 2>&1 &); echo executing" 3 >/dev/null
 for i in $(seq 1 20); do ping -c1 -W1 $HEAD >/dev/null 2>&1 || break; sleep 1; done
 for i in $(seq 1 60); do ping -c1 -W1 $HEAD >/dev/null 2>&1 && { echo "Stage 1 answers"; break; }; sleep 2; done

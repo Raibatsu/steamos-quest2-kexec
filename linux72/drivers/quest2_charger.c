@@ -36,6 +36,9 @@
 #define FLOAT_VOLTAGE_CFG	0x1070		/* 3.6 V + 10 mV / step */
 #define POWER_PATH_STATUS	0x110b		/* bit0 valid input, bit4 USB path, bit6 USB suspended */
 #define APSD_RESULT_STATUS	0x1308		/* bit0 SDP, bit1 OCP, bit2 CDP, bit3 DCP, bit4 float */
+#define USBIN_PLUGIN_RT_STS	0x1310		/* bit4: USB input plugged in */
+#define WDOG_PET		0x1643		/* bit0: pet the charger watchdog; unpetted, it disables charging (BITE_WDOG_DISABLE_CHARGING) */
+#define USBIN_CMD_IL		0x1340		/* bit0: suspend the USB input (left set by the shutdown from Horizon) */
 #define USBIN_CURRENT_LIMIT	0x1370		/* 50 mA / step */
 
 #define STATUS_MASK		GENMASK(2, 0)
@@ -62,6 +65,8 @@ struct q2chg {
 	struct delayed_work work;
 	struct mutex lock;
 	int behaviour;			/* POWER_SUPPLY_CHARGE_BEHAVIOUR_AUTO or _INHIBIT_CHARGE */
+	int edge_tries;
+	unsigned int tick;
 	bool unsafe;			/* programmed limits outside the battery profile: never enable charging */
 };
 
@@ -134,12 +139,27 @@ static void q2chg_apply(struct q2chg *c)
 		c->unsafe = false;
 		dev_info(c->dev, "charging conditions are fine again\n");
 	}
+	/* Horizon leaves the USB input suspended across the kexec: nothing can charge or power the system from it. Un-suspend it while plugged in and safe. */
+	if (want && !rd(c, USBIN_PLUGIN_RT_STS, &en) && (en & BIT(4)) && !rd(c, USBIN_CMD_IL, &en) && (en & 1)) {
+		regmap_update_bits(c->rm, USBIN_CMD_IL, 1, 0);
+		dev_info(c->dev, "USB input was suspended: resumed (current limit unchanged)\n");
+		c->edge_tries = 0;
+		regmap_update_bits(c->rm, CHARGING_ENABLE_CMD, 1, 0);	/* the charger only leaves "disabled" on a rising edge of the enable bit */
+		msleep(50);
+	}
+	/* enable bit already set but the charger still reports "disabled" with a valid input: give it the edge (a few tries only) */
+	if (want && c->edge_tries < 3 && !rd(c, POWER_PATH_STATUS, &en) && (en & VALID_INPUT) && !rd(c, CHGR_STATUS_1, &st) &&
+	    (st & STATUS_MASK) == ST_DISABLE && !rd(c, CHARGING_ENABLE_CMD, &en) && (en & 1)) {
+		c->edge_tries++;
+		regmap_update_bits(c->rm, CHARGING_ENABLE_CMD, 1, 0);
+		msleep(50);
+		dev_info(c->dev, "charger idle with charging enabled: re-triggering the enable bit (%d)\n", c->edge_tries);
+	}
 	if (!rd(c, CHARGING_ENABLE_CMD, &en) && ((en & 1) != want)) {
 		regmap_update_bits(c->rm, CHARGING_ENABLE_CMD, 1, want);
 		dev_info(c->dev, "charging %s (%s)\n", want ? "enabled" : "disabled",
 			 c->behaviour == POWER_SUPPLY_CHARGE_BEHAVIOUR_AUTO ? (why ? why : "auto") : "inhibited by user");
 	}
-	(void)st;
 	mutex_unlock(&c->lock);
 }
 
@@ -147,9 +167,12 @@ static void q2chg_work(struct work_struct *w)
 {
 	struct q2chg *c = container_of(to_delayed_work(w), struct q2chg, work);
 
-	q2chg_apply(c);
-	power_supply_changed(c->bat);
-	schedule_delayed_work(&c->work, 5 * HZ);
+	regmap_write(c->rm, WDOG_PET, 1);
+	if (!(++c->tick % 3))
+		q2chg_apply(c);
+	if (!(c->tick % 5))
+		power_supply_changed(c->bat);
+	schedule_delayed_work(&c->work, 2 * HZ);
 }
 
 /* ---- the USB input supply ---- */
